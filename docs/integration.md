@@ -76,7 +76,7 @@ Stock-Agent/
  KRX·DART API                                       에이전트 13명
       ↓                                                   │
   ki.sqlite ──▶ facts (JSON) ──▶ ki-bridge.js ──▶ 프롬프트 │
-   원장                                          DIANA·GUARD·SAFE
+   원장                                    DIANA·GUARD·SAFE·ACE
       │                                                   ▼
       │                                             판정 (BUY/SELL/HOLD)
       │                                                   │
