@@ -9,7 +9,7 @@
 //   async fetchMarket(resolved) -> { kind, symbol, display, [nameKo, tapbitPair],
 //                                    candles, indicators, fundamentals:{lines},
 //                                    news:{headlines}, sentiment:{lines}, priceLine,
-//                                    intraday:{candles15m, summaryLines} }
+//                                    intraday:{candles15m, summaryLines}, [krCode, ki] }
 //   async fetchTape()         -> [{ sym, price, changePct }]
 //
 // Failure policy: each source is best-effort. A failed source degrades to
@@ -17,6 +17,9 @@
 // failure is fatal (throws) — everything downstream needs the price series.
 
 const { computeIndicators } = require('./indicators.js');
+// 주가 모니터링 원장(KRX·DART 공식 API) 브리지. 설정에서 켜야만 동작하고,
+// 켜도 실패하면 조용히 null 을 준다 — 시세 수집을 막지 않는다.
+const kiBridge = require('./ki-bridge.js');
 
 const TIMEOUT_MS = 10000;
 const UA =
@@ -1094,6 +1097,8 @@ async function fetchMarket(resolved) {
   let intraday = { candles15m: [], summaryLines: ['인트라데이 데이터 없음'] };
   let board = null; // multi-venue price board (KR stocks only)
   let perp = null; // USDT perpetual view used by the scalp desk
+  let krCode = null; // KRX 6자리 코드 (KR stocks only)
+  let ki = null; // 주가 모니터링 원장의 실측값 (ki.enabled 일 때만)
 
   if (kind === 'crypto') {
     // Candles are fatal.
@@ -1114,7 +1119,7 @@ async function fetchMarket(resolved) {
   } else if (kind === 'krstock') {
     // Korean stock: reuse the Yahoo chart path with the KRX yahoo symbol and
     // KRW-flavoured labels; add the tapbit perpetual-futures fundamentals line.
-    const krCode = String(resolved.yahoo || '').replace(/\.KS$/i, '');
+    krCode = String(resolved.yahoo || '').replace(/\.KS$/i, '');
     const yq = await fetchYahooChart(resolved.yahoo, {
       displayLabel: resolved.nameKo,
       currencySymbol: '₩',
@@ -1128,16 +1133,19 @@ async function fetchMarket(resolved) {
     sentiment.lines = ['주식은 공포·탐욕 지수 미적용 — 뉴스 헤드라인으로 심리 판단'];
 
     const perpSym = ((KR_STOCKS[symbol] || {}).perps || {}).binance || null;
-    const [newsR, intraR, boardR, k15R, k1dR] = await Promise.allSettled([
+    const [newsR, intraR, boardR, k15R, k1dR, kiR] = await Promise.allSettled([
       fetchNews(newsQuery(resolved)),
       fetchYahooIntraday(resolved.yahoo),
       fetchPriceBoard(resolved, yq.quote),
       perpSym ? fetchPerpKlines(perpSym, '15m', 200) : Promise.reject(new Error('미상장')),
       perpSym ? fetchPerpKlines(perpSym, '1d', 120) : Promise.reject(new Error('미상장')),
+      // 원장 조회는 네트워크가 아니라 로컬 파이썬 스폰이다. 꺼져 있으면 즉시 null.
+      kiBridge.fetchKiFacts(krCode).catch(() => null),
     ]);
     if (newsR.status === 'fulfilled') news.headlines = newsR.value;
     if (intraR.status === 'fulfilled') intraday = buildIntraday(intraR.value, '₩');
     if (boardR.status === 'fulfilled') board = boardR.value;
+    if (kiR.status === 'fulfilled' && kiR.value) ki = kiR.value;
 
     // The tapbit contract is a 24/7 USDT perpetual, so the scalp desk reads
     // this chart — not the KRX session chart, which is stale outside 09:00–15:30
@@ -1217,6 +1225,8 @@ async function fetchMarket(resolved) {
     intraday,
     ...(board ? { board } : {}),
     ...(perp ? { perp } : {}),
+    ...(krCode ? { krCode } : {}),
+    ...(ki ? { ki } : {}),
   };
 }
 

@@ -57,6 +57,18 @@ function makeDefaults() {
       maintenanceMarginPct: 0.5, // 청산 계산용
     },
     ui: { sound: true, animations: true },
+    // 주가 모니터링 원장(../stock-monitor) 연동. 계약: docs/integration.md
+    // 기본이 꺼짐이다 — 켜기 전까지 trading-floor 의 동작은 통합 이전과 같다.
+    ki: {
+      enabled: false,
+      python: '', // 비우면 python3 → python 순서로 찾는다
+      script: '', // 비우면 <저장소>/stock-monitor/ki_monitor.py
+      timeoutSec: 30,
+      cacheMin: 30,
+      withDisclosures: false, // 켜면 DART 공시까지 — 네트워크·키가 필요하다
+      staleWarnDays: 5, // 원장이 이만큼 묵으면 프롬프트에 경고를 붙인다
+      injectInto: ['diana', 'guard', 'safe'], // 실측을 받을 에이전트
+    },
   };
 }
 

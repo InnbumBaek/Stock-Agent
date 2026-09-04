@@ -7,6 +7,8 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+// 주가 모니터링 원장(KRX·DART 공식 API) 브리지 — 설정에서 켜야만 동작한다.
+const kiBridge = require('./ki-bridge.js');
 
 // ---------------------------------------------------------------------------
 // 에이전트 메타 (순서 고정: 애널리스트 4 → 리서치 2 → 스캘핑 2 → 수석 1)
@@ -55,6 +57,29 @@ function extractJson(text) {
 // ---------------------------------------------------------------------------
 // 프롬프트 빌더 헬퍼
 // ---------------------------------------------------------------------------
+// 주가 모니터링 원장의 실측값을 이 에이전트가 받아야 하는가.
+//
+// market.ki 는 ki.enabled 이고 한국 주식일 때만 존재한다. 어느 에이전트에게
+// 줄지는 config 의 ki.injectInto 가 정한다(기본: diana·guard·safe).
+// 실측을 판단으로 바꾸지 않는다 — 측정값과 그 가정을 그대로 옮길 뿐이다.
+function kiLines(market, agentId) {
+  if (!market || !market.ki || !market.krCode) return [];
+  let cfg;
+  try {
+    cfg = kiBridge.kiConfig();
+  } catch (_) {
+    return [];
+  }
+  if (!Array.isArray(cfg.injectInto) || !cfg.injectInto.includes(agentId)) return [];
+  try {
+    return kiBridge.formatKiLines(market.ki, market.krCode, {
+      staleWarnDays: cfg.staleWarnDays,
+    });
+  } catch (_) {
+    return []; // 서식이 깨져도 프롬프트 생성을 막지 않는다
+  }
+}
+
 function lines(arr, fallback = '데이터 없음') {
   if (!Array.isArray(arr) || arr.length === 0) return fallback;
   return arr.map((s) => String(s)).join('\n');
@@ -384,6 +409,9 @@ function buildPrompt(id, context = {}) {
   const ind = market.indicators || {};
   const symLine = `대상: ${market.display || market.symbol || '심볼'} (${market.symbol || ''})\n${market.priceLine || '가격 정보 없음'}`;
   const attack = context.mode === 'attack';
+  // 원장 실측값. 비어 있으면(꺼짐·비한국주식·조회 실패) 아무 데도 붙지 않는다.
+  const kiFacts = kiLines(market, id);
+  let kiUsed = false;
 
   const parts = [header(meta), '', symLine, ''];
 
@@ -421,6 +449,12 @@ function buildPrompt(id, context = {}) {
   } else if (id === 'diana') {
     parts.push('[기본적 데이터]');
     parts.push(lines((market.fundamentals || {}).lines));
+    if (kiFacts.length) {
+      parts.push('');
+      parts.push('[KRX·DART 실측 — 주가 모니터링 원장]');
+      parts.push(kiFacts.join('\n'));
+      kiUsed = true;
+    }
     parts.push('');
     parts.push('위 기본적 데이터를 근거로 밸류에이션과 펀더멘털을 분석하라.');
   } else if (id === 'nova') {
@@ -689,6 +723,12 @@ function buildPrompt(id, context = {}) {
     parts.push('');
     parts.push(hasScalp ? (attack ? OUTPUT_ACE_ATTACK : OUTPUT_ACE) : OUTPUT_ACE_CORE);
     return parts.join('\n');
+  }
+
+  if (kiFacts.length && !kiUsed) {
+    parts.push('');
+    parts.push('[KRX·DART 실측 — 주가 모니터링 원장]');
+    parts.push(kiFacts.join('\n'));
   }
 
   parts.push('');

@@ -21,6 +21,8 @@
 //   POST /api/scan             워치리스트 일괄 스캔 시작
 //   GET  /api/replay?file=…    리포트 재생 시작 (SSE로 흘림)
 //   POST /api/telegram/test    테스트 메시지 발송
+// 라우트 (통합 — docs/integration.md):
+//   GET  /api/ki?symbol=…      주가 모니터링 원장의 실측값 (ki.enabled 일 때만)
 // 신규 모듈(config/watcher/…)은 병렬로 만들어지는 중이라 require를 전부 감싼다.
 // 모듈이 없으면 해당 라우트만 503으로 응답하고 서버 기동은 절대 실패하지 않는다.
 
@@ -31,6 +33,13 @@ const path = require('path');
 
 const { Engine } = require('./engine');
 const { fetchTape, fetchVenueBoard, resolveSymbol, fetchMarket, KR_STOCKS } = require('./market');
+// 주가 모니터링 원장 브리지. 없으면 /api/ki 만 503 이고 서버는 그대로 뜬다.
+let kiBridge = null;
+try {
+  kiBridge = require('./ki-bridge');
+} catch (err) {
+  console.error('[ki] ki-bridge 모듈 없음 — /api/ki 는 비활성:', err && err.message);
+}
 
 // 기본 8000. 이미 8000이 쓰이는 중이면 PORT=8123 처럼 덮어쓸 수 있다.
 const PORT = Number(process.env.PORT) || 8000;
@@ -251,6 +260,60 @@ async function handleBoard(res, searchParams) {
     console.error('[board] 조회 실패:', err && err.message ? err.message : err);
     return sendJson(res, 200, { rows: [], lines: [], error: '전광판 조회 실패' });
   }
+}
+
+// ---- GET /api/ki?symbol=SKHYNIX ----
+//
+// 주가 모니터링 원장(KRX·DART 공식 API)의 실측값을 그대로 돌려준다.
+// 여기서 가공하지 않는다 — 등급·점수·권고를 만들지 않는 것이 원장 쪽 계약이고,
+// 이 라우트는 그 계약을 그대로 통과시키는 창구다.
+async function handleKi(res, searchParams) {
+  if (!kiBridge) {
+    return sendJson(res, 503, { error: 'ki-bridge 모듈을 불러오지 못했습니다.' });
+  }
+  if (!kiBridge.isEnabled()) {
+    return sendJson(res, 200, {
+      enabled: false,
+      note: '주가 모니터링 원장 연동이 꺼져 있습니다. config.json 의 ki.enabled 를 true 로 두십시오.',
+    });
+  }
+
+  const raw = (searchParams && searchParams.get('symbol')) || '';
+  if (!String(raw).trim()) {
+    return sendJson(res, 400, { error: 'symbol 파라미터가 필요합니다.' });
+  }
+
+  // 심볼 → KRX 6자리 코드. 코드를 직접 줘도 되고 SKHYNIX 같은 별칭도 된다.
+  let code = kiBridge.krCodeOf(raw);
+  if (!code) {
+    const resolved = resolveSymbol(raw);
+    if (resolved && resolved.kind === 'krstock') code = kiBridge.krCodeOf(resolved.yahoo);
+  }
+  if (!code) {
+    return sendJson(res, 200, {
+      enabled: true,
+      found: false,
+      note: '원장은 한국 상장 종목만 다룹니다. KRX 6자리 코드 또는 하이닉스·삼성전자를 지정하십시오.',
+      supported: Object.keys(KR_STOCKS),
+    });
+  }
+
+  const facts = await kiBridge.fetchKiFacts(code);
+  if (!facts) {
+    return sendJson(res, 200, {
+      enabled: true,
+      found: false,
+      code,
+      note: '원장에서 이 종목의 실측값을 얻지 못했습니다. 서버 로그의 [ki] 줄을 보십시오.',
+    });
+  }
+  return sendJson(res, 200, {
+    enabled: true,
+    found: true,
+    code,
+    lines: kiBridge.formatKiLines(facts, code),
+    facts,
+  });
 }
 
 // ---- GET /api/tape ----
@@ -1341,6 +1404,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && pathname === '/api/telegram/test') {
       return await handleTelegramTest(req, res);
+    }
+
+    // --- 통합 라우트 (docs/integration.md) ---
+    if (req.method === 'GET' && pathname === '/api/ki') {
+      return await handleKi(res, searchParams);
     }
 
     if (req.method === 'GET') {
