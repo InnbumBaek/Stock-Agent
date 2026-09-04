@@ -87,7 +87,7 @@ diff 에 잡혀 실제 변경이 묻힌다. 편집 후 `file <파일>` 로 확�
 
 ```bash
 cd stock-monitor && python ki_monitor.py selftest   # 86개 (키·네트워크 불필요)
-cd trading-floor && npm test                         # 110개
+cd trading-floor && npm test                         # 117개
 ```
 
 통합 계층을 건드렸다면 **회귀 확인**까지 해라 — 에이전트 절을 끈 리포트가 통합 이전

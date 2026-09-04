@@ -253,7 +253,7 @@ SK하이닉스 ₩1,504,000 (+5.54%) · KRX 정규장 종가 2026-08-12 (23일 �
     "timeoutSec": 30, "cacheMin": 30,
     "withDisclosures": false,  // 켜면 DART 공시까지 (네트워크·키 필요)
     "staleWarnDays": 5,        // 원장이 이만큼 묵으면 프롬프트에 경고
-    "injectInto": ["diana", "guard", "safe"],
+    "injectInto": ["diana", "guard", "safe", "ace"],
     "candleFallback": true,    // 야후가 막히면 원장 일봉으로 대신한다
     "candleDays": 200          // 대체 시 가져올 일수
   }
@@ -262,6 +262,50 @@ SK하이닉스 ₩1,504,000 (+5.54%) · KRX 정규장 종가 2026-08-12 (23일 �
 
 `server/config.js` 의 `DEFAULTS.ki` 와 `ki-bridge.js` 의 `DEFAULT_KI` 는 **키가 같아야 한다** —
 한쪽에만 키가 생기면 설정이 조용히 무시된다. 테스트가 검사한다.
+
+### 4.5 어느 에이전트가 실측을 받는가
+
+`ki.injectInto` 가 정한다. 기본값은 `["diana", "guard", "safe", "ace"]`.
+
+| 에이전트 | 붙는 자리 | 왜 |
+|---|---|---|
+| **DIANA** (기본적 분석) | `[기본적 데이터]` 뒤, 지시문 **앞** | 지시문이 "위 기본적 데이터를 근거로"라고 말한다. 데이터가 먼저 와야 한다 |
+| **GUARD·SAFE** (리스크) | 공통 푸터 | 처분 소요일수·유동성 집중도는 청산 위험과 다른 축의 리스크다 |
+| **ACE** (수석 트레이더) | 애널리스트 리포트 바로 뒤 | 처분에 몇 영업일이 걸리는가는 목표가만큼이나 회수 판단을 좌우한다. 애널리스트를 거친 해석만 받으면 그 숫자가 중간에 사라질 수 있다 |
+| TARO·NOVA·VIBE·BULL·BEAR·PM | — | 기본값에서는 붙지 않는다 |
+
+ACE 는 `buildPrompt` 에서 조기 반환하므로 공통 푸터를 타지 않는다. 별도 주입 지점이
+있고, 한 프롬프트에 두 번 들어가지 않도록 `kiUsed` 로 막는다.
+
+### 4.6 KR_STOCKS 밖의 종목 — 포트폴리오사
+
+`trading-floor` 는 원래 하이닉스·삼성전자 둘만 한국 주식으로 알았다. USDT 무기한
+선물이 상장돼 있어 24시간 체결 차트를 읽을 수 있는 종목들이다.
+
+회수 판단 대상은 그렇지 않다. 무기한 선물이 없는 보통의 상장사이고, 그래도
+**원장에 시세가 있으면 분석할 수 있어야 한다.**
+
+```bash
+node server/export-brief.js --run --symbols 000250,058970 --mode algo
+```
+
+`resolveSymbol` 이 KRX 6자리 코드를 받으면 `kind:'krstock'` · `generic:true` 로
+해석한다. 그 경로에서 달라지는 것:
+
+| | KR_STOCKS 등재 (하이닉스·삼성전자) | KRX 코드 (`generic`) |
+|---|---|---|
+| 야후 심볼 | 표에 박혀 있다 (`000660.KS`) | 모르면 `.KS` → `.KQ` 순으로 찾는다 |
+| 종목명 | 표에 있다 | **원장이 채워 준다** (`market.nameKo`) |
+| `market.perp` | 있다 (바이낸스 무기한) | **없다** |
+| `market.board` | 있다 (거래소 전광판) | **없다** |
+| 프롬프트 | 이중 가격 체계 안내 | "무기한 선물이 상장돼 있지 않다" 안내 |
+
+**이 경로는 `algo` 모드용이다.** 20배 스캘핑의 전제는 체결 차트(무기한)인데 그것이
+없다. 정규장 차트로 20배 포지션을 설계하면 ATR 이 부풀려져 멀쩡한 셋업이 잘못
+기각된다. 그래서 기본적 데이터 블록에 그 사실을 명시한다.
+
+종목명은 사이드카(`floor.run/1`)의 `nameKo` 로 실려 리포트에 회사명으로 찍힌다 —
+회의 자료에 `000250` 이 아니라 `삼천당제약` 이 보여야 한다.
 
 ---
 
@@ -399,8 +443,8 @@ python ki_monitor.py daily  --with-agents        # 적재 → 리포트 한 번�
 |---|---|---|
 | `stock-monitor/ki_monitor.py` | +약 700 / −0 | 파일 끝 '11. 통합 계층' 섹션 · 서브커맨드 · 자리표시자 |
 | `trading-floor/server/config.js` | +12 / −0 | `DEFAULTS.ki` 블록 |
-| `trading-floor/server/market.js` | +약 55 / −8 | `krstock` 경로에 원장 조회·캔들 폴백, 반환에 `krCode`·`ki` |
-| `trading-floor/server/agents.js` | +40 / −0 | `kiLines()` 헬퍼 + 프롬프트 주입 지점 |
+| `trading-floor/server/market.js` | +약 100 / −12 | `krstock` 경로에 원장 조회·캔들 폴백·임의 KRX 코드, 반환에 `krCode`·`ki` |
+| `trading-floor/server/agents.js` | +약 50 / −0 | `kiLines()` 헬퍼 + DIANA·ACE·공통 푸터 주입 지점 |
 | `trading-floor/server/server.js` | +68 / −0 | `GET /api/ki` 라우트 |
 | `trading-floor/server/engine.js` | +약 90 / −0 | `_runRecord()` + 사이드카 저장 |
 
@@ -435,7 +479,7 @@ python ki_monitor.py report --market KOSPI --with-agents
 
 ```bash
 cd stock-monitor  && python ki_monitor.py selftest    # 86개 (기존 64 + 통합 22)
-cd trading-floor  && npm test                          # 110개 (기존 68 + 통합 42)
+cd trading-floor  && npm test                          # 117개 (기존 68 + 통합 49)
 ```
 
 통합이 지키기로 한 것 중 **테스트가 실제로 강제하는 것**:
@@ -465,6 +509,10 @@ cd trading-floor  && npm test                          # 110개 (기존 68 + 통
 | facts 와 candles 가 캐시를 공유하지 않는다 | `ki-bridge.test.mjs` |
 | 원장 시세 줄이 "실시간이 아니다"를 밝힌다 | `ki-bridge.test.mjs` |
 | 캔들이 없으면 시세 줄을 만들지 않는다 | `ki-bridge.test.mjs` |
+| KRX 6자리 코드가 한국 주식으로 해석된다 | `krstock.test.mjs` |
+| KR_STOCKS 등재 종목은 무기한 선물 경로를 그대로 탄다 | `krstock.test.mjs` |
+| 종목명은 원장이 채워 준 값을 우선하고, 없으면 null | `krstock.test.mjs` |
+| ACE 가 실측을 직접 받는다 | `krstock.test.mjs` |
 
 추가로 **에이전트 절을 끈 리포트가 통합 이전 원본 출력과 바이트 단위로 같은지**를
 회귀 확인에 쓴다 (원본 `ki_monitor.py` 로 같은 원장을 렌더해 비교).

@@ -670,6 +670,14 @@ function buildPrompt(id, context = {}) {
     parts.push('[애널리스트 리포트]');
     parts.push(formatAnalystReports(context.analystReports));
     parts.push('');
+    // 최종 판정자에게는 애널리스트를 거친 해석이 아니라 원본 실측도 함께 준다.
+    // 처분에 몇 영업일이 걸리는가는 목표가만큼이나 회수 판단을 좌우한다.
+    if (kiFacts.length) {
+      parts.push('[KRX·DART 실측 — 주가 모니터링 원장]');
+      parts.push(kiFacts.join('\n'));
+      parts.push('');
+      kiUsed = true;
+    }
     if (context.debateLog && context.debateLog.length) {
       parts.push('[전체 토론 로그]');
       parts.push(formatDebateLog(context.debateLog));

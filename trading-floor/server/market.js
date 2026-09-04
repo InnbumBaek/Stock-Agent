@@ -246,6 +246,26 @@ function resolveSymbol(input) {
     };
   }
 
+  // KR_STOCKS 에 없는 KRX 6자리 코드 — 포트폴리오사처럼 무기한 선물이 상장돼 있지
+  // 않은 종목이다. 원장(ki.sqlite)에 시세가 있으면 분석할 수 있다.
+  //
+  // 이 경로에는 USDT 무기한 계약이 없다 → perp·전광판이 없고, 20배 스캘핑의
+  // 전제(체결 차트)가 성립하지 않는다. algo 모드로 쓰는 것이 맞다.
+  const krCodeMatch = raw.match(/^(\d{6})(?:\.(KS|KQ))?$/);
+  if (krCodeMatch) {
+    const code = krCodeMatch[1];
+    return {
+      kind: 'krstock',
+      symbol: code,
+      display: code,
+      // 접미사를 모르면 null 로 두고 수집 단계에서 .KS → .KQ 순으로 찾는다.
+      yahoo: krCodeMatch[2] ? `${code}.${krCodeMatch[2]}` : null,
+      nameKo: null,
+      tapbitPair: null,
+      generic: true, // KR_STOCKS 에 등재되지 않은 종목
+    };
+  }
+
   let symbol = raw;
   let forcedCrypto = false;
 
@@ -1098,6 +1118,7 @@ async function fetchMarket(resolved) {
   let board = null; // multi-venue price board (KR stocks only)
   let perp = null; // USDT perpetual view used by the scalp desk
   let krCode = null; // KRX 6자리 코드 (KR stocks only)
+  let nameKo = resolved.nameKo || null; // 한국어 종목명 — 원장에서 보강될 수 있다
   let ki = null; // 주가 모니터링 원장의 실측값 (ki.enabled 일 때만)
 
   if (kind === 'crypto') {
@@ -1119,24 +1140,35 @@ async function fetchMarket(resolved) {
   } else if (kind === 'krstock') {
     // Korean stock: reuse the Yahoo chart path with the KRX yahoo symbol and
     // KRW-flavoured labels; add the tapbit perpetual-futures fundamentals line.
-    krCode = String(resolved.yahoo || '').replace(/\.KS$/i, '');
-    const tapbitLine = `탭비트 무기한 선물: ${resolved.tapbitPair} (USDT 결제, 기초자산 KRX ${krCode})`;
+    krCode = kiBridge.krCodeOf(resolved.yahoo) || kiBridge.krCodeOf(resolved.symbol) || '';
+    nameKo = resolved.nameKo || null;
+    const tapbitLine = resolved.tapbitPair
+      ? `탭비트 무기한 선물: ${resolved.tapbitPair} (USDT 결제, 기초자산 KRX ${krCode})`
+      : null;
 
     // 캔들 실패는 이 프로젝트에서 유일한 치명적 실패다. 사내망·폐쇄망처럼 야후가
     // 막힌 곳에서는 분석 자체가 서므로, 그럴 때만 원장(ki.sqlite)의 KRX 공식
     // 일봉으로 대신한다. 지어내는 것이 아니라 이미 공식 API 로 받아 둔 값이다.
+    //
+    // 야후 접미사를 모르는 종목(KR_STOCKS 밖)은 .KS(유가) → .KQ(코스닥) 순으로
+    // 찾는다. 코드만으로는 어느 시장인지 알 수 없기 때문이다.
+    const yahooTries = resolved.yahoo ? [resolved.yahoo] : [`${krCode}.KS`, `${krCode}.KQ`];
     let yq = null;
     let yahooErr = null;
-    try {
-      yq = await fetchYahooChart(resolved.yahoo, {
-        displayLabel: resolved.nameKo,
-        currencySymbol: '₩',
-        exchangeLabel: 'KRX',
-        currencyWord: '',
-        tapbitLine,
-      });
-    } catch (err) {
-      yahooErr = err;
+    for (const ySym of yahooTries) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        yq = await fetchYahooChart(ySym, {
+          displayLabel: resolved.nameKo || krCode,
+          currencySymbol: '₩',
+          exchangeLabel: 'KRX',
+          currencyWord: '',
+          ...(tapbitLine ? { tapbitLine } : {}),
+        });
+        break;
+      } catch (err) {
+        yahooErr = err;
+      }
     }
 
     if (yq) {
@@ -1154,15 +1186,15 @@ async function fetchMarket(resolved) {
       }
       candles = kc.candles;
       priceLine =
-        kiBridge.formatKiPriceLine(kc, resolved.nameKo) || '데이터 없음';
+        kiBridge.formatKiPriceLine(kc, resolved.nameKo || kc.name) || '데이터 없음';
+      if (!nameKo && kc.name) nameKo = kc.name;
       fundamentals.lines = [
         `출처: ${kc.source}${kc.adjusted ? ' · 수정주가' : ' · 원주가'}`,
         `기간 ${kc.first} ~ ${kc.as_of} (${kc.n}영업일)` +
           (kc.stale_days != null ? ` · 기준일로부터 ${kc.stale_days}일 경과` : ''),
         '공개 시세 API 를 쓰지 못해 원장의 일별 시세로 대신했다. ' +
           '실시간 호가·시가총액·인트라데이는 이 경로에 없다.',
-        tapbitLine,
-      ];
+      ].concat(tapbitLine ? [tapbitLine] : []);
       console.error(
         `[market] ${resolved.display} 야후 시세 실패 — 원장 일봉으로 대체합니다` +
           ` (${yahooErr && yahooErr.message})`
@@ -1174,7 +1206,9 @@ async function fetchMarket(resolved) {
     const [newsR, intraR, boardR, k15R, k1dR, kiR] = await Promise.allSettled([
       fetchNews(newsQuery(resolved)),
       fetchYahooIntraday(resolved.yahoo),
-      yq ? fetchPriceBoard(resolved, yq.quote) : Promise.reject(new Error('시세 없음')),
+      yq && resolved.tapbitPair
+        ? fetchPriceBoard(resolved, yq.quote)
+        : Promise.reject(new Error('전광판 대상 아님')),
       perpSym ? fetchPerpKlines(perpSym, '15m', 200) : Promise.reject(new Error('미상장')),
       perpSym ? fetchPerpKlines(perpSym, '1d', 120) : Promise.reject(new Error('미상장')),
       // 원장 조회는 네트워크가 아니라 로컬 파이썬 스폰이다. 꺼져 있으면 즉시 null.
@@ -1184,6 +1218,19 @@ async function fetchMarket(resolved) {
     if (intraR.status === 'fulfilled') intraday = buildIntraday(intraR.value, '₩');
     if (boardR.status === 'fulfilled') board = boardR.value;
     if (kiR.status === 'fulfilled' && kiR.value) ki = kiR.value;
+
+    // KR_STOCKS 밖 종목은 USDT 무기한 계약이 없다. 없다는 사실을 적어 두지 않으면
+    // 20배 레벨을 정규장 차트로 설계하게 되고, 그 순간 판정이 통째로 틀어진다.
+    if (resolved.generic) {
+      fundamentals.lines = fundamentals.lines.concat([
+        `KRX ${krCode} — USDT 무기한 선물이 상장돼 있지 않다. ` +
+          '체결 차트(24시간)·전광판·인트라데이가 없으므로 레버리지 스캘핑의 전제가 ' +
+          '성립하지 않는다. 레벨은 정규장 원화 기준으로만 낸다.',
+      ]);
+      // 종목명은 원장이 알고 있다 (KR_STOCKS 에 없으므로 코드만 들고 왔다).
+      const s = ki && ki.stocks ? ki.stocks[krCode] : null;
+      if (!nameKo && s && s.name) nameKo = s.name;
+    }
 
     // The tapbit contract is a 24/7 USDT perpetual, so the scalp desk reads
     // this chart — not the KRX session chart, which is stale outside 09:00–15:30
@@ -1252,7 +1299,7 @@ async function fetchMarket(resolved) {
     display,
     // Surface the KR-stock metadata on the market object itself so downstream
     // prompt builders (agents.js) can read market.nameKo / market.tapbitPair.
-    ...(resolved.nameKo ? { nameKo: resolved.nameKo } : {}),
+    ...(nameKo ? { nameKo } : {}),
     ...(resolved.tapbitPair ? { tapbitPair: resolved.tapbitPair } : {}),
     candles,
     indicators,

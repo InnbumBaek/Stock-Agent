@@ -95,6 +95,17 @@ SK하이닉스 ₩1,504,000 (+5.54%) · KRX 정규장 종가 2026-08-12 (23일 �
 이 경로에는 실시간 호가·무기한 선물·인트라데이가 없으므로 `scalp`·`attack` 모드보다
 `algo` 모드가 맞습니다.
 
+### 포트폴리오사를 대상으로 넣으려면
+
+KRX 6자리 코드를 그대로 주면 됩니다. 원장에 시세가 있으면 분석합니다.
+
+```bash
+node server/export-brief.js --run --symbols 000250,058970 --mode algo
+```
+
+무기한 선물이 없는 종목이라 체결 차트·전광판이 없고, 그 사실이 프롬프트에 명시됩니다.
+종목명은 원장이 채워 주므로 리포트에 코드가 아니라 회사명으로 실립니다.
+
 리포트의 §5 는 이렇게 실립니다.
 
 ```
@@ -132,7 +143,7 @@ python ki_monitor.py selftest   # 86개 (키 불필요)
 cd trading-floor
 node server/server.js           # http://localhost:8000
 # 데모 모드(claude CLI 없이): http://localhost:8000/?demo=1
-npm test                        # 110개
+npm test                        # 117개
 ```
 
 `--with-agents` 없이 만든 리포트는 통합 이전 원본 코드의 출력과 **바이트 단위로 같습니다.**

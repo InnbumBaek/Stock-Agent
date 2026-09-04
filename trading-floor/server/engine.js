@@ -1040,7 +1040,10 @@ class Engine extends EventEmitter {
       symbol: resolved.symbol,
       display: resolved.display,
       kind: resolved.kind,
-      nameKo: resolved.nameKo || null,
+      // KR_STOCKS 밖 종목은 코드만 들고 오므로 이름이 없다. 수집 단계에서 원장이
+      // 채워 준 market.nameKo 를 먼저 쓴다 — 회의 자료에 코드가 아니라 회사명이
+      // 찍혀야 한다.
+      nameKo: (market && market.nameKo) || resolved.nameKo || null,
       // KRX 6자리 — 주가 모니터링 워치리스트와 조인하는 키다. 한국 주식이 아니면 null.
       krCode: (market && market.krCode) || null,
       mode,

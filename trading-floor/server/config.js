@@ -67,7 +67,7 @@ function makeDefaults() {
       cacheMin: 30,
       withDisclosures: false, // 켜면 DART 공시까지 — 네트워크·키가 필요하다
       staleWarnDays: 5, // 원장이 이만큼 묵으면 프롬프트에 경고를 붙인다
-      injectInto: ['diana', 'guard', 'safe'], // 실측을 받을 에이전트
+      injectInto: ['diana', 'guard', 'safe', 'ace'], // 실측을 받을 에이전트
       // 공개 API(야후)로 캔들을 못 받을 때 원장의 KRX 공식 일봉으로 대신할지.
       // 사내망·폐쇄망에서 분석이 아예 서는 것을 막는다.
       candleFallback: true,

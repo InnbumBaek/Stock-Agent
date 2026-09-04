@@ -11,7 +11,7 @@ AI 에이전트들이 시장 데이터를 분석하고 토론해 매매 판정�
 node server/server.js          # http://localhost:8000
 # 포트 충돌 시: PORT=8123 node server/server.js
 # Windows: start-floor.cmd 더블클릭
-npm test                       # 110개 단위 테스트
+npm test                       # 117개 단위 테스트
 ```
 
 의존성 설치 불필요 — `package.json`에 dependencies가 없고 Node 내장 모듈만 쓴다.
@@ -101,6 +101,12 @@ SK하이닉스·삼성전자는 **USDT 결제 무기한 선물**이 여러 거�
   바꾸지 마라. 판정은 이쪽 에이전트가 한다
 - 브리지는 원장을 **읽기만** 한다. 분석 요청이 KRX API 호출을 유발하면 할당량이
   조용히 소진된다. `ingest` 는 사람이 돌린다
+
+**KRX 6자리 코드를 그대로 분석 대상으로 받는다.** `KR_STOCKS` 에 없는 종목은
+`generic:true` 로 해석되고, 야후 접미사를 `.KS` → `.KQ` 순으로 찾고 종목명은 원장이
+채운다. 무기한 선물이 없으므로 `market.perp`·`market.board` 가 없고 프롬프트에
+그 사실을 적는다 — **이 경로는 `algo` 모드용이다.** 정규장 차트로 20배를 설계하면
+ATR 이 부풀려져 멀쩡한 셋업이 잘못 기각된다.
 
 **야후가 막힌 망에서는 원장 일봉이 캔들을 대신한다** (`ki.candleFallback`, 기본 켬).
 캔들 실패는 이 프로젝트에서 유일한 치명적 실패라 그대로 두면 분석이 아예 선다.
