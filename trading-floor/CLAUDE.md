@@ -11,7 +11,7 @@ AI 에이전트들이 시장 데이터를 분석하고 토론해 매매 판정�
 node server/server.js          # http://localhost:8000
 # 포트 충돌 시: PORT=8123 node server/server.js
 # Windows: start-floor.cmd 더블클릭
-npm test                       # 15개 단위 테스트
+npm test                       # 89개 단위 테스트
 ```
 
 의존성 설치 불필요 — `package.json`에 dependencies가 없고 Node 내장 모듈만 쓴다.
@@ -31,6 +31,7 @@ server/
   market.js       시장 데이터 수집 (키 없는 공개 API만)
   indicators.js   SMA/RSI/MACD/ATR/변동성
   session-prep.js CLI — 수집 결과를 압축 JSON으로 stdout에 출력
+  ki-bridge.js    ../stock-monitor 원장(KRX·DART)의 실측값 조회 — 기본 꺼짐
 public/           단일 페이지 프론트 (캔버스 스프라이트 + DOM, 빌드 도구 없음)
 .claude/commands/floor.md   /floor 슬래시 커맨드
 reports/          런마다 마크다운 리포트 + decisions.json 누적
@@ -83,6 +84,24 @@ SK하이닉스·삼성전자는 **USDT 결제 무기한 선물**이 여러 거�
 - 시장 데이터 수집은 전부 best-effort — 한 소스가 죽어도 나머지로 계속 진행한다.
   캔들 실패만 치명적(throw)이다
 - 새 소스를 붙이기 전에 `node -e "fetch(...)"`로 실제 응답을 확인하라. 문서만 보고 짜면 대개 틀린다
+
+## 주가 모니터링 원장 연동 (선택 · 기본 꺼짐)
+
+같은 저장소의 `../stock-monitor` 는 KRX·DART **공식 API**로 일별 원장을 쌓는 파이썬
+도구다. `server/ki-bridge.js` 가 그 원장에서 **측정값만** 읽어 DIANA·GUARD·SAFE 의
+프롬프트에 붙인다. `config.json` 의 `ki.enabled` 로 켠다.
+
+**켜기 전까지 이 앱의 동작은 통합 이전과 한 글자도 다르지 않다.** 파이썬이 없어도,
+원장이 없어도 앱은 그대로 돈다 — 실측만 빠진다.
+
+- 원장은 **일별 종가**다. 실시간이 아니다. 며칠 지난 값을 현재가로 읽으면 판정이
+  통째로 틀어지므로, 브리지가 기준일과 경과일수를 항상 함께 붙인다
+- 원장 쪽은 **판단하지 않는 것**이 설계 원칙이다. 받은 측정값을 등급·점수·권고로
+  바꾸지 마라. 판정은 이쪽 에이전트가 한다
+- 브리지는 원장을 **읽기만** 한다. 분석 요청이 KRX API 호출을 유발하면 할당량이
+  조용히 소진된다. `ingest` 는 사람이 돌린다
+
+계약은 `../docs/integration.md` 가 단일 진실 소스다.
 
 ## 슬래시 커맨드
 

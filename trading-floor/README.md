@@ -83,6 +83,7 @@ trading-floor/
 │  ├─ market.js       시장 데이터 수집 (심볼 해석·시세·뉴스·센티먼트·티커테이프)
 │  ├─ agents.js       에이전트 프롬프트 + claude 스폰 + 데모 목업
 │  ├─ engine.js       분석 엔진 (이벤트 시퀀스·병렬/토론 오케스트레이션·리포트 저장)
+│  ├─ ki-bridge.js    ../stock-monitor 원장(KRX·DART) 실측값 조회 (기본 꺼짐)
 │  └─ server.js       HTTP 서버 (정적 파일 + SSE + /api/analyze + /api/tape)
 ├─ public/            프론트엔드 (index.html / style.css / app.js)
 ├─ reports/           분석 결과 저장 (YYYY-MM-DD-<심볼>-<HHmm>.md, decisions.json)
@@ -99,6 +100,7 @@ trading-floor/
 | GET | `/api/stream` | SSE 스트림 — 접속 시 현재 진행 상황을 replay 후 실시간 구독 |
 | POST | `/api/analyze` | `{ "symbol": "BTC", "demo": false }` → 202 시작 / 409 진행 중 / 400 심볼 없음 |
 | GET | `/api/tape` | 하단 티커테이프용 시세 배열 (서버 60초 캐시) |
+| GET | `/api/ki` | `?symbol=SKHYNIX` → 주가 모니터링 원장의 실측값 (`ki.enabled` 일 때만) |
 
 ## 면책
 
