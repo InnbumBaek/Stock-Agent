@@ -11,7 +11,7 @@ AI 에이전트들이 시장 데이터를 분석하고 토론해 매매 판정�
 node server/server.js          # http://localhost:8000
 # 포트 충돌 시: PORT=8123 node server/server.js
 # Windows: start-floor.cmd 더블클릭
-npm test                       # 117개 단위 테스트
+npm test                       # 130개 단위 테스트
 ```
 
 의존성 설치 불필요 — `package.json`에 dependencies가 없고 Node 내장 모듈만 쓴다.
@@ -43,9 +43,19 @@ reports/          런마다 마크다운 리포트 + 같은 이름의 .json(기�
 | 에이전트 | 역할 |
 |---|---|
 | TARO / DIANA / NOVA / VIBE | 기술적 · 기본적 · 뉴스 · 센티먼트 |
+| **FLOW / FILING** | 유동성·체결 / 공시·자본구조 — **원장 실측이 있어야 돈다** |
 | BULL ⇄ BEAR | 매수/매도 논거 4턴 토론 |
 | BLITZ / GUARD | 스캘퍼 / 리스크 관리 |
-| ACE | 수석 트레이더 — 최종 판정 |
+| RISKY / SAFE / **RED** / NEUTRAL | 리스크 위원회 — RED 는 **가정 반대심문**, 원장 실측 필요 |
+| ACE / PM | 수석 트레이더 — 최종 판정 / 포트폴리오 매니저 승인 |
+
+**에이전트를 늘릴 때는 새 업무를 준다.** 같은 재료를 여러 명이 보면 의견이 상관되고
+전담이 없어 아무도 깊이 보지 않는다. FLOW·FILING·RED 에게는 통합 이전에 아무도 보지
+못하던 값(실행 시뮬레이션·매물대·자본구조·측정 한계)을 주고, 기존 역할에서는 그만큼
+뺐다. 배정은 `agents.js` 의 `KI_SECTIONS` 이고 `test/roster.test.mjs` 가 강제한다.
+
+셋 다 `requiresKi: true` 라 원장 실측이 없는 런(코인·해외주식)에서는 명단에서 빠진다 —
+**그쪽 비용은 통합 이전과 같다** (algo 기준 opus 13콜, 한국 종목만 16콜).
 
 | 모드 | 파이프라인 | 특징 |
 |---|---|---|

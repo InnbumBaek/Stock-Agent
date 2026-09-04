@@ -13,7 +13,19 @@ const path = require('path');
 const { resolveSymbol, fetchMarket } = require('./market');
 const { AGENTS, runAgent, checkClaudeAvailable } = require('./agents');
 
-const ANALYST_IDS = ['taro', 'diana', 'nova', 'vibe'];
+// 원장 실측이 있어야만 의미가 있는 역할. 실측이 없으면 명단에서 뺀다 —
+// 볼 것이 없는 에이전트를 돌리면 opus 콜만 태우고 "데이터 없음"만 돌아온다.
+// (코인·해외주식 런의 비용이 통합 이전과 같아야 한다)
+const KI_ONLY_IDS = new Set(AGENTS.filter((a) => a.requiresKi).map((a) => a.id));
+
+function filterByKi(ids, market) {
+  const hasKi = !!(market && market.ki && market.krCode);
+  if (hasKi) return ids.slice();
+  return ids.filter((id) => !KI_ONLY_IDS.has(id));
+}
+
+// FLOW·FILING 은 원장 실측이 있어야 볼 것이 있다. 없으면 아래 filterByKi 가 뺀다.
+const ANALYST_IDS = ['taro', 'diana', 'flow', 'filing', 'nova', 'vibe'];
 const DEBATE_ORDER = ['bull', 'bear', 'bull', 'bear'];
 const SCALP_ORDER = ['blitz', 'guard']; // 순차: guard는 blitz 결과를 받음
 
@@ -24,7 +36,9 @@ const SCALP_ORDER = ['blitz', 'guard']; // 순차: guard는 blitz 결과를 받�
 //           (연출·시연용. 관망이라는 선택지를 없애는 것이므로 리스크 고지는 그대로 유지한다.)
 // 리스크 위원회 — 순차. 뒤에 오는 심사자가 앞의 의견을 받아 반박한다.
 // (논문의 Risk Management team: 공격적/보수적이 먼저 붙고 중립이 중재한다)
-const RISK_ORDER = ['risky', 'safe', 'neutral'];
+// RED 는 계획이 아니라 계획이 딛고 선 가정을 심문한다. NEUTRAL 이 그 지적까지 중재하도록
+// 마지막 바로 앞에 둔다.
+const RISK_ORDER = ['risky', 'safe', 'red', 'neutral'];
 
 const MODES = {
   algo: {
@@ -516,7 +530,15 @@ class Engine extends EventEmitter {
 
       // 2) 애널리스트 병렬 (Promise.allSettled) — 모드별 인원
       this._log('── 애널리스트 팀 분석 ──', 'stage');
-      const tasks = plan.analysts.map(async (id) => {
+      const analystIds = filterByKi(plan.analysts, market);
+      const skipped = plan.analysts.filter((id) => !analystIds.includes(id));
+      if (skipped.length) {
+        this._log(
+          `> 원장 실측이 없어 ${skipped.map(metaLabel).join('·')} 는 건너뜁니다`,
+          'sys'
+        );
+      }
+      const tasks = analystIds.map(async (id) => {
         this._emit({ type: 'agent:start', id });
         try {
           const res = await runAgent(id, { market, mode }, { mock });
@@ -631,9 +653,10 @@ class Engine extends EventEmitter {
         scalp: dec.scalp,
       };
       // 리스크 위원회는 트레이더 계획의 진입가 기준 청산가까지 함께 본다.
-      const riskInfoPlan = plan.risk.length ? this._buildRiskInfo(market, traderPlan) : null;
-      if (plan.risk.length) this._log('── 리스크 위원회 심사 ──', 'stage');
-      for (const id of plan.risk) {
+      const riskIds = filterByKi(plan.risk, market);
+      const riskInfoPlan = riskIds.length ? this._buildRiskInfo(market, traderPlan) : null;
+      if (riskIds.length) this._log('── 리스크 위원회 심사 ──', 'stage');
+      for (const id of riskIds) {
         this._emit({ type: 'agent:start', id });
         try {
           const res = await runAgent(
