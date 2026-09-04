@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
 import re
 import sqlite3
@@ -4797,6 +4798,75 @@ def selftest() -> int:
                                     "qty": [100, 200], "cost": [40000, 40000],
                                     "target_price": [90000, 90000]}))["total_value"] > 0))
 
+    # 통합 계층 (facts) — 내보내는 순간 값이 조용히 바뀌는 일이 없어야 합니다
+    check("결측은 null 로 나간다 (0 으로 채우지 않는다)", lambda: _assert(
+        _jsonable(np.nan) is None and _jsonable(float("inf")) is None
+        and _jsonable(pd.NaT) is None and _jsonable(None) is None))
+    check("numpy 값이 파이썬 기본형으로 나간다", lambda: _assert(
+        type(_jsonable(np.int64(3))) is int and type(_jsonable(np.float64(1.5))) is float
+        and type(_jsonable(np.bool_(True))) is bool))
+    check("0 은 결측으로 바뀌지 않는다", lambda: _assert(
+        _jsonable(0.0) == 0.0 and _jsonable(0) == 0 and _jsonable(False) is False))
+
+    def _measures_whitelist():
+        """단위표에 없는 컬럼은 내보내지 않습니다.
+        중간 계산 컬럼이 새어 나가면 받는 쪽이 뜻 모르는 숫자를 근거로 씁니다."""
+        row = pd.Series({"close": 100.0, "days_3pct": 4.0, "_tmp": 9.9, "hi_n": 1.0})
+        m = _facts_measures(row)
+        _assert(set(m) == {"close", "days_3pct"})
+    check("facts 는 단위표에 있는 값만 내보낸다", _measures_whitelist)
+
+    check("모든 측정값에 단위 설명이 붙는다", lambda: _assert(
+        all(isinstance(u, str) and u.strip() for u in FACTS_UNITS.values())))
+
+    def _facts_roundtrip():
+        """인메모리 원장으로 내보내기 전 구간을 통째로 돌립니다.
+        네트워크·키 없이도 여기까지는 검증할 수 있어야 합니다."""
+        con = sqlite3.connect(":memory:")
+        con.executescript(SCHEMA)
+        days = pd.bdate_range("2026-01-01", periods=90).strftime("%Y%m%d")
+        rng = np.random.default_rng(11)
+        rows = []
+        for code, base in (("111111", 10000.0), ("222222", 5000.0)):
+            px = base * np.cumprod(1 + rng.normal(0, 0.02, len(days)))
+            vol = rng.uniform(1e4, 5e4, len(days))
+            for d, p, v in zip(days, px, vol):
+                rows.append((d, code, f"검증{code}", "KOSDAQ", float(p),
+                             float(v), float(p * v), float(p * 1e6), 1e6))
+        con.executemany(
+            "INSERT INTO price_daily (date,code,name,market,close,volume,value,mktcap,shares)"
+            " VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        con.commit()
+
+        p = facts_payload(con, ["111111", "999999"])
+        con.close()
+
+        _assert(p["ok"] is True)
+        _assert(p["schema"] == FACTS_SCHEMA)
+        # 있는 종목은 측정값이 나오고
+        s = p["stocks"]["111111"]
+        _assert(s["found"] is True and s["market"] == "KOSDAQ")
+        _assert(s["measures"]["days_3pct"] > 0)
+        _assert(s["measures"]["days_3pct_med"] > 0)
+        # 없는 종목은 지어내지 않고 없다고 말한다
+        _assert(p["stocks"]["999999"]["found"] is False)
+        _assert("999999" in p["missing"])
+        # 가정이 값과 함께 나간다
+        _assert(len(p["assumptions"]) >= 4 and len(p["units"]) >= 20)
+        # 그리고 전부 JSON 으로 나갈 수 있어야 한다 (NaN 이 섞이면 여기서 깨집니다)
+        txt = json.dumps(p, ensure_ascii=False, allow_nan=False)
+        _assert("NaN" not in txt and "Infinity" not in txt)
+    check("facts 내보내기 왕복 (원장 → JSON)", _facts_roundtrip)
+
+    def _facts_no_verdict():
+        """이 도구는 판단하지 않습니다. 내보내는 키에 등급·점수·권고가 없어야 합니다."""
+        banned = {"grade", "score", "rating", "recommendation", "signal",
+                  "verdict", "action", "advice", "target_price"}
+        _assert(not (banned & set(FACTS_UNITS)))
+        row = pd.Series({"close": 1.0, "per": 5.0})
+        _assert(not (banned & set(_facts_measures(row))))
+    check("facts 는 판단(등급·점수·권고)을 내보내지 않는다", _facts_no_verdict)
+
     total = passed + len(failed)
     for f in failed:
         print("  FAIL", f)
@@ -5175,6 +5245,310 @@ def cmd_live(market: str, every: int, refresh: int) -> int:
         time.sleep(max(30, every))
 
 
+# ════════════════════════════════════════════════════════════════════════
+# 11. 통합 계층 — 관측 사실 내보내기 (facts)
+# ════════════════════════════════════════════════════════════════════════
+# 같은 저장소의 trading-floor(에이전트 데스크)가 이 원장의 실측값을 읽어 갈 수
+# 있도록 stdout 으로 JSON 한 덩어리를 냅니다. 리포트(HTML)와 재료는 같고
+# 표현만 다릅니다 — 새로 계산하는 지표는 하나도 없습니다.
+#
+# 이 명령이 지키는 것 — 리포트와 완전히 같은 원칙입니다.
+#
+#   1. 판단하지 않습니다. 등급·점수·권고·'유리/불리' 분류를 만들지 않습니다.
+#      받는 쪽(에이전트)이 판정을 내리더라도, 그 판정의 재료는 측정값이어야지
+#      이 파일이 미리 내린 결론이어서는 안 됩니다.
+#   2. 없는 값을 채우지 않습니다. 모르면 null 입니다. 0 이 아닙니다.
+#   3. 가정을 함께 보냅니다. 처분 소요일수는 참여율 가정 위에 서 있고,
+#      숫자만 넘기면 받는 쪽에서 그 가정이 사라집니다.
+#   4. 단위를 함께 보냅니다. 금융 데이터는 단위가 틀려도 계산이 돌아갑니다.
+#      units 표를 붙여 받는 쪽이 '천원'과 '원'을 혼동할 수 없게 합니다.
+#   5. 네트워크를 쓰지 않습니다(기본값). 원장에 있는 것만 냅니다. 원장이
+#      오래됐으면 stale_days 로 알릴 뿐, 몰래 새로 받아오지 않습니다.
+#      --with-disclosures 를 주면 그때만 DART 공시를 조회합니다.
+
+FACTS_SCHEMA = "ki.facts/1"
+
+# 시장별 기준 지수 — 베타·트래킹에러를 재는 잣대.
+# 코스피 종목을 코스닥 지수에 대고 재면 베타가 틀립니다.
+FACTS_BENCH = {"KOSPI": "코스피", "KOSDAQ": BENCHMARK, "KONEX": "코넥스"}
+
+# 측정값이 무엇을 센 것인가. 값과 반드시 함께 나갑니다.
+FACTS_UNITS = {
+    "close": "원 (수정주가)",
+    "mktcap": "원",
+    "vol_ann": "비율 (연율 표준편차, 0.35 = 35%)",
+    "drawdown": "비율 (기간 최고가 대비, 음수)",
+    "px_pctile": "분위 0~1 (관측기간 내 주가 위치)",
+    "beta": "배 (기준 지수 대비)",
+    "te": "비율 (연율 트래킹에러)",
+    "adv20_shares": "주 (20일 평균 거래량)",
+    "med20_shares": "주 (20일 거래량 중앙값)",
+    "med_vs_mean": "배 (중앙값/평균)",
+    "turnover_20d": "원 (20일 평균 거래대금)",
+    "turnover_trend": "비율 (20일평균/60일평균 - 1)",
+    "liq_pctile": "분위 0~1 (자기 종목 거래대금의 관측기간 내 위치)",
+    "liq_conc5": "비율 (최근 60일 거래대금 중 상위 5일 비중)",
+    "zero_days": "비율 (최근 60일 중 무거래일 비중)",
+    "days_1pct": "영업일 (시총 1% 처분, 평균 거래량 기준)",
+    "days_1pct_med": "영업일 (시총 1% 처분, 중앙값 기준)",
+    "days_3pct": "영업일 (시총 3% 처분, 평균 거래량 기준)",
+    "days_3pct_med": "영업일 (시총 3% 처분, 중앙값 기준)",
+    "days_5pct": "영업일 (시총 5% 처분, 평균 거래량 기준)",
+    "days_5pct_med": "영업일 (시총 5% 처분, 중앙값 기준)",
+    "vwap20": "원 (20일 거래대금/거래량)",
+    "vwap60": "원 (60일 거래대금/거래량)",
+    "px_vs_vwap": "비율 (종가/20일VWAP - 1)",
+    "amihud": "비유동성 지수 (클수록 체결비용 큼, 스케일 1e12)",
+    "per": "배", "pbr": "배", "roe": "비율",
+    "peer_per": "배 (같은 업종 PER 중앙값, 표본 5개 이상)",
+    "per_vs_peer": "비율 (자기 PER/업종 중앙값 - 1)",
+    "lockup_days": "일 (상장 후 6개월 시점까지 남은 일수, 음수면 경과)",
+}
+
+# 이 숫자들이 서 있는 가정. 숫자와 분리되면 안 됩니다.
+FACTS_ASSUMPTIONS = [
+    "처분 소요일수 — 해당 기준 거래량의 10%만 장내에서 소화한다고 가정합니다. "
+    "블록딜·시간외 대량매매는 계산에 넣지 않았습니다.",
+    "평균 거래량 기준과 중앙값 기준을 나란히 냅니다. 거래대금이 상위 며칠에 "
+    "몰리는 종목은 평균 기준이 낙관적입니다 (liq_conc5 를 함께 보십시오).",
+    f"보호예수 — 상장일 + {LOCKUP_MONTHS}개월로 일괄 추정한 값입니다. "
+    "실제 확약 기간은 종목마다 다르며 증권신고서로 확인해야 합니다.",
+    "업종 PER 중앙값 — 표본 5개 미만 업종은 산출하지 않습니다. "
+    "PER 이 0~60 밖인 종목은 업종 비교에서 제외합니다(이익이 0 근처면 배수가 발산합니다).",
+    "분위(pctile) 는 이 원장의 관측기간 안에서의 위치입니다. 관측기간이 짧으면 "
+    "분위도 그만큼만 의미합니다 (markets[].n_days 를 보십시오).",
+]
+
+FACTS_NOTES = [
+    "이 데이터는 측정값입니다. 등급·점수·권고가 아닙니다.",
+    "출처는 한국거래소 KRX Open API 와 금융감독원 DART Open API 입니다. "
+    "크롤링·유료 벤더·애널리스트 컨센서스는 쓰지 않았습니다.",
+    "투자권유·투자자문 자료가 아닙니다.",
+]
+
+
+def _jsonable(v):
+    """numpy·pandas 값을 JSON 이 아는 형태로 바꿉니다.
+
+    NaN·NaT·inf 는 전부 null 입니다. 0 으로 채우지 않습니다 — 받는 쪽에서
+    '측정하지 못함'과 '0으로 측정됨'을 구분할 수 있어야 합니다."""
+    if v is None:
+        return None
+    if isinstance(v, (str, bool, np.bool_)):
+        return bool(v) if isinstance(v, np.bool_) else v
+    if isinstance(v, np.integer):
+        return int(v)
+    if isinstance(v, (float, np.floating)):
+        f = float(v)
+        return None if (np.isnan(f) or np.isinf(f)) else f
+    if isinstance(v, int):
+        return v
+    if isinstance(v, (pd.Timestamp, datetime)):
+        return None if pd.isna(v) else v.strftime("%Y-%m-%d")
+    if isinstance(v, date):
+        return v.strftime("%Y-%m-%d")
+    if isinstance(v, (list, tuple, set, np.ndarray, pd.Index)):
+        return [_jsonable(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _jsonable(x) for k, x in v.items()}
+    if isinstance(v, pd.Series):
+        return {str(k): _jsonable(x) for k, x in v.items()}
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return str(v)
+
+
+def _facts_measures(row: pd.Series) -> dict:
+    """엑싯 표 한 행에서 내보낼 측정값만 골라 냅니다.
+
+    표에 있는 컬럼을 통째로 덤프하지 않습니다. 중간 계산용 컬럼까지 나가면
+    받는 쪽이 의미를 모르는 숫자를 근거로 쓰게 됩니다."""
+    return {k: _jsonable(row.get(k)) for k in FACTS_UNITS if k in row.index}
+
+
+def facts_market_of(con, code: str) -> str | None:
+    """이 종목이 원장의 어느 시장에 적재돼 있는가.
+
+    --market 을 사람이 매번 맞춰 주지 않아도 되게 원장에 물어봅니다.
+    (같은 코드가 두 시장에 있으면 행이 많은 쪽 — 실질적으로는 없습니다)"""
+    row = con.execute(
+        "SELECT market, COUNT(*) AS n FROM price_daily WHERE code=? "
+        "GROUP BY market ORDER BY n DESC LIMIT 1", (code,)).fetchone()
+    return row[0] if row else None
+
+
+def facts_payload(con, codes: list[str], with_disclosures: bool = False) -> dict:
+    """종목별 관측 사실 묶음. 판단은 하지 않습니다."""
+    codes = [str(c).strip().zfill(6) for c in codes if str(c).strip()]
+    codes = list(dict.fromkeys(codes))          # 중복 제거, 입력 순서 유지
+
+    today = pd.Timestamp(date.today())
+    out = {
+        "ok": True,
+        "schema": FACTS_SCHEMA,
+        "calc_version": CALC_VERSION,
+        "generated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "stage": STAGE,
+        "units": FACTS_UNITS,
+        "assumptions": FACTS_ASSUMPTIONS,
+        "notes": FACTS_NOTES,
+        "markets": {},
+        "stocks": {},
+        "missing": [],
+    }
+
+    # 시장별로 묶습니다 — 행렬(quant_frames)은 시장 단위로 한 번만 만듭니다.
+    groups: dict[str, list[str]] = {}
+    for c in codes:
+        mk = facts_market_of(con, c)
+        if mk is None:
+            out["missing"].append(c)
+            continue
+        groups.setdefault(mk, []).append(c)
+
+    if not groups:
+        out["ok"] = False
+        out["reason"] = ("요청한 종목이 원장에 없습니다. "
+                         "ingest --universe <시장> 을 먼저 실행하십시오.")
+        return out
+
+    inst = instruments_panel(con)
+    fs = fundamentals_panel(con)
+    mpanel = macro_panel(con)
+
+    for market, mcodes in groups.items():
+        fr = quant_frames(con, market)
+        if not fr:
+            out["missing"].extend(mcodes)
+            continue
+        m = quant_metrics(fr)
+        last_day = pd.Timestamp(fr["last_day"])
+        v = valuation(m, fs) if not fs.empty else pd.DataFrame()
+
+        # 시장 국면 — 수준이 아니라 분위로 봅니다.
+        try:
+            reg = regime(fr, mpanel)
+        except Exception as e:                          # noqa: BLE001
+            print(f"  [국면 보류] {type(e).__name__}: {e}", file=sys.stderr)
+            reg = {}
+        reg_out = {}
+        for k, d in reg.items():
+            fmt = d.get("fmt")
+            reg_out[k] = {
+                "label": d.get("label"),
+                "value": _jsonable(d.get("value")),
+                "display": fmt(d["value"]) if callable(fmt) and d.get("value") is not None else None,
+                "pctile": _jsonable(d.get("pctile")),
+                "chg20": _jsonable(d.get("chg20")),
+                "what": d.get("what"),
+            }
+
+        out["markets"][market] = {
+            "as_of": str(last_day.date()),
+            "stale_days": int((today - last_day).days),
+            "n_days": int(fr["n_days"]),
+            "n_stocks": int(m.shape[0]),
+            "benchmark": FACTS_BENCH.get(market),
+            "regime": reg_out,
+            "fs_companies": int(len(fs)) if not fs.empty else 0,
+        }
+
+        ex = exit_metrics(fr, mcodes, m)
+        if ex.empty:
+            out["missing"].extend(mcodes)
+            continue
+
+        # 베타·트래킹에러 — 그 시장의 기준 지수 대비
+        bench_series = None
+        bi = index_panel(con, FACTS_BENCH.get(market))
+        if not bi.empty:
+            bench_series = bi.set_index("date")["close"]
+        sens = market_sensitivity(fr["close"], list(ex.index), bench_series)
+        if not sens.empty:
+            for col in ("beta", "te"):
+                ex[col] = pd.to_numeric(sens[col], errors="coerce")
+
+        # 밸류에이션 — 원장의 DART 재무에서
+        if not v.empty:
+            for col in ("per", "pbr", "roe", "deficit", "impaired"):
+                if col in v.columns:
+                    ex[col] = v[col].reindex(ex.index)
+
+        # 공시 이벤트는 네트워크가 필요합니다. 요청했을 때만 켭니다.
+        dsc = pd.DataFrame()
+        if with_disclosures:
+            try:
+                cc = dart_corp_codes().set_index("stock_code")["corp_code"]
+                pcc = [cc[c] for c in ex.index if c in cc.index]
+                if pcc:
+                    dsc = unlisted_disclosures(pcc, days=180, limit=60)
+            except Exception as e:                      # noqa: BLE001
+                print(f"  [공시 보류] {type(e).__name__}: {e}", file=sys.stderr)
+
+        ex = attach_context(ex, inst, v, dsc, last_day)
+
+        for code in mcodes:
+            if code not in ex.index:
+                out["missing"].append(code)
+                continue
+            row = ex.loc[code]
+            try:
+                obs = exit_observations(row)
+            except Exception as e:                      # noqa: BLE001
+                print(f"  [{code} 관측 보류] {type(e).__name__}: {e}", file=sys.stderr)
+                obs = {"liq": [], "px": [], "cap": [], "fin": [], "events": []}
+            vp = volume_profile(fr["close"][code], fr["value"][code])
+            out["stocks"][code] = {
+                "found": True,
+                "code": code,
+                "name": _jsonable(row.get("name")) or _jsonable(fr["names"].get(code)),
+                "market": market,
+                "sector": _jsonable(row.get("sector")),
+                "as_of": str(last_day.date()),
+                "stale_days": int((today - last_day).days),
+                "close": _jsonable(row.get("close")),
+                "measures": _facts_measures(row),
+                "observations": {k: _jsonable(vv) for k, vv in obs.items()},
+                "volume_profile": [{"price": _jsonable(p), "share": _jsonable(s)}
+                                   for p, s in vp],
+            }
+
+    out["missing"] = sorted(set(out["missing"]))
+    for c in out["missing"]:
+        out["stocks"].setdefault(c, {"found": False, "code": c,
+                                     "reason": "원장에 이 종목의 시세가 없습니다"})
+    if not any(s.get("found") for s in out["stocks"].values()):
+        out["ok"] = False
+        out.setdefault("reason", "요청한 종목 중 원장에 있는 것이 없습니다")
+    return out
+
+
+def cmd_facts(codes: list[str], with_disclosures: bool = False,
+              indent: int | None = None) -> int:
+    """facts 명령 — stdout 은 JSON 만. 진단 메시지는 전부 stderr 로 보냅니다.
+
+    받는 쪽(ki-bridge.js)이 stdout 을 통째로 JSON.parse 하기 때문에,
+    여기에 한 줄이라도 사람용 메시지가 섞이면 통합이 깨집니다."""
+    db = Path(env("db_path"))
+    if not db.exists():
+        payload = {"ok": False, "schema": FACTS_SCHEMA,
+                   "reason": f"원장이 없습니다: {db.name}. "
+                             f"ingest --universe <시장> 을 먼저 실행하십시오.",
+                   "stocks": {}, "markets": {}, "missing": list(codes)}
+        print(json.dumps(payload, ensure_ascii=False, indent=indent))
+        return 1
+    con = connect()
+    try:
+        payload = facts_payload(con, codes, with_disclosures)
+    finally:
+        con.close()
+    print(json.dumps(payload, ensure_ascii=False, indent=indent))
+    return 0 if payload.get("ok") else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="ki_monitor.py",
@@ -5219,6 +5593,16 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--year", help="사업연도 (기본: 작년)")
     sub.add_parser("drill", help="알림 통보 경로 확인")
     sub.add_parser("selftest", help="계산 검증 (키 불필요)")
+    ft = sub.add_parser(
+        "facts", help="종목별 관측 사실을 JSON 으로 출력 (통합용 · 네트워크 불필요)")
+    ft.add_argument("--code", action="append", dest="codes", metavar="000660",
+                    help="종목코드 6자리. 여러 번 줄 수 있습니다")
+    ft.add_argument("--codes", dest="codes_csv", metavar="000660,005930",
+                    help="쉼표로 구분한 종목코드 목록")
+    ft.add_argument("--with-disclosures", action="store_true",
+                    help="DART 공시 이벤트까지 포함 (네트워크·키 필요)")
+    ft.add_argument("--indent", type=int, default=None,
+                    help="JSON 들여쓰기 (기본: 한 줄)")
     return ap
 
 
@@ -5310,6 +5694,24 @@ def main(argv: list[str] | None = None) -> int:
         notify("SEV1", "TEST", "모의 알림 (drill)")
     elif args.cmd == "selftest":
         return selftest()
+    elif args.cmd == "facts":
+        codes = list(args.codes or [])
+        if args.codes_csv:
+            codes += [c for c in re.split(r"[,\s]+", args.codes_csv) if c]
+        if not codes:
+            # 종목을 안 주면 watchlist.csv 의 상장 종목을 씁니다.
+            wl = _watchlist()
+            if wl is not None and not wl["listed"].empty:
+                codes = list(wl["listed"]["code"])
+        if not codes:
+            print(json.dumps(
+                {"ok": False, "schema": FACTS_SCHEMA,
+                 "reason": "종목을 지정하지 않았고 watchlist.csv 도 비어 있습니다. "
+                           "--code 000660 처럼 지정하십시오.",
+                 "stocks": {}, "markets": {}, "missing": []},
+                ensure_ascii=False, indent=args.indent))
+            return 1
+        return cmd_facts(codes, args.with_disclosures, args.indent)
     return 0
 
 
