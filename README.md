@@ -38,10 +38,10 @@ KRX·DART 공식 API 로 사실을 잽니다
   ┌───────────────────────────────────────────────────┐
   │                                                   ▼
 [stock-monitor]                              [trading-floor]
- KRX·DART API                                 에이전트 13명
+ KRX·DART API                                 에이전트 16명
       ↓                                             │
   ki.sqlite ──▶ facts ──▶ ki-bridge.js ──▶ 프롬프트 │
-   원장                        DIANA·GUARD·SAFE·ACE
+   원장                   FLOW·FILING·RED·DIANA·GUARD·SAFE·ACE
       │                                             ▼
       │                                      판정 (BUY/SELL/HOLD)
       │                                             │

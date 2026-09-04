@@ -14,7 +14,7 @@
 ─────────────────────────────────────────    ──────────────
 KRX·DART 공식 API 로 사실을 잰다
         ↓
-에이전트 13명이 그 사실을 보고 토론해 판정한다
+에이전트 16명이 그 사실을 보고 토론해 판정한다
         ↓
 측정값 §1~§4 + 에이전트 판정 §5 를 한 리포트로 낸다  →  사람이 읽고 결정한다
 ```
@@ -73,10 +73,10 @@ Stock-Agent/
   ┌───────────────────────────────────────────────────────┐
   │                                                       ▼
 [stock-monitor]                                    [trading-floor]
- KRX·DART API                                       에이전트 13명
+ KRX·DART API                                       에이전트 16명
       ↓                                                   │
   ki.sqlite ──▶ facts (JSON) ──▶ ki-bridge.js ──▶ 프롬프트 │
-   원장                                    DIANA·GUARD·SAFE·ACE
+   원장                     FLOW·FILING·RED·DIANA·GUARD·SAFE·ACE
       │                                                   ▼
       │                                             판정 (BUY/SELL/HOLD)
       │                                                   │
@@ -399,7 +399,7 @@ node server/export-brief.js --max-age-hours 24 # 하루 지난 분석은 뺀다
 | `--out <경로>` | 기본 `reports/agent-brief.json` |
 | `--max-age-hours N` | 수집 시 N시간보다 오래된 건 제외 |
 
-**`--run` 없이는 절대 분석을 돌리지 않는다.** 실전 런은 에이전트 13명 × claude opus 라
+**`--run` 없이는 절대 분석을 돌리지 않는다.** 실전 런은 에이전트 최대 16명 × claude opus 라
 비용이 크다. 실수로 돌아가면 안 된다.
 
 `stdout` 은 **사람용 진행 상황**이고 결과는 파일로 쓴다 — `facts` 와 반대다.
