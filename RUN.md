@@ -1,18 +1,44 @@
 # 실행 안내 (RUN.md)
 
-압축을 풀고 이 순서대로만 하면 됩니다. 자세한 내용은 `README.md`,
+압축을 풀고 위에서부터 순서대로 하면 됩니다. 자세한 내용은 `README.md`,
 계약은 `docs/integration.md` 를 보십시오.
+
+## 무엇을 하는 물건인가
+
+폴더 두 개가 릴레이를 합니다.
+
+```
+[stock-monitor]  한국거래소·금감원에서 숫자를 받아 원장에 쌓는다      (Python)
+        ↓  숫자를 넘긴다
+[trading-floor]  에이전트 16명이 그 숫자를 보고 토론해 판정한다        (Node)
+        ↓  판정을 돌려준다
+[stock-monitor]  숫자 §1~§4 + 판정 §5 를 합쳐 HTML 리포트 한 장을 만든다
+        ↓
+     회의에서 사람이 읽고 결정한다
+```
+
+**원장(`ki.sqlite`)이 이 구조의 중심입니다.** 87MB 파일 하나이고, 없으면 공식 API 로
+언제든 다시 만듭니다. 이것이 있어야 나머지가 전부 돕니다.
 
 ---
 
-## 0. 전제
+## 0. 컴퓨터 준비 (약 10분)
 
-| | 필요한 것 |
-|---|---|
-| `stock-monitor` (Python) | Python 3.11+ · `pip install pandas numpy scipy requests lxml` |
-| `trading-floor` (Node) | Node 20+ · **npm install 불필요** (의존성 0개) |
-| 실전 에이전트 런 | `claude` CLI 가 PATH 에 있고 로그인돼 있을 것 |
-| 원장 적재 | KRX Open API 키 · DART Open API 키 |
+| 필요한 것 | 확인 | 없으면 |
+|---|---|---|
+| Python 3.11+ | `python --version` | python.org — 설치할 때 **Add to PATH** 를 켜십시오 |
+| Node 20+ | `node --version` | nodejs.org 의 LTS |
+| `claude` CLI | `claude --version` | 실전 에이전트 런에만 필요합니다 (7단계) |
+
+파이썬 패키지는 이 한 줄이 전부입니다.
+
+```bash
+pip install pandas numpy scipy requests lxml
+```
+
+`trading-floor` 는 **설치할 것이 없습니다** — npm 의존성이 0개입니다.
+
+> 윈도우에서 `python` 이 없다고 나오면 `py` 로 바꿔 보십시오.
 
 ---
 
@@ -45,11 +71,27 @@ DART_API_KEY=...     # 금융감독원
 FRED_API_KEY=...     # 선택 (해외 매크로)
 ```
 
-```bash
-python ki_monitor.py check-auth      # 키가 읽히는지만 확인 (값은 출력 안 함)
-```
+> **KRX 는 키 발급과 사용신청이 따로입니다.** 인증키를 받은 뒤 일별시세·지수·국고채·
+> 선물 각 서비스에 **URL 사용신청**을 눌러야 합니다. 신청하지 않은 서비스는 키가
+> 유효해도 `401` 을 돌려줍니다. `ingest` 가 401 이면 거의 이것입니다.
 
 > `.env` 는 `.gitignore` 에 있습니다. 절대 커밋하지 마십시오.
+
+### 준비가 됐는지 한 번에 보기
+
+```bash
+python ki_monitor.py doctor
+```
+
+패키지·키·원장·CSV 를 전부 검사해 `O` / `X` 로 보여 주고, 마지막 줄에 다음 할 일을
+알려 줍니다. **`X` 를 전부 `O` 로 만드는 것이 준비 과정의 전부입니다.**
+(`-` 는 없어도 되는 항목입니다. 키 값은 출력하지 않습니다.)
+
+```
+[1] 패키지          O  pandas   O  numpy   -  weasyprint (선택)
+[2] API 키          X  KRX_API_KEY        ← 이걸 채워야 합니다
+[3] 데이터          X  원장 없음  ← ingest 로 만드십시오
+```
 
 ---
 
@@ -100,8 +142,11 @@ python ki_monitor.py report --market KOSDAQ
 #   → out/KI_exit_YYYYMMDD.html
 ```
 
+만들어진 HTML 을 더블클릭하면 브라우저에서 열립니다.
+
 여기까지가 **통합 이전 원본과 완전히 같은 동작**입니다. 이 리포트가 제대로
-나오는지 먼저 확인하십시오.
+나오는지 먼저 확인하십시오 — 나중에 문제가 생겼을 때 이 단계가 되는지만 보면
+원인이 원장 쪽인지 에이전트 쪽인지 즉시 갈립니다.
 
 ---
 
@@ -131,11 +176,18 @@ node server/export-brief.js --run --demo --symbols 000660 --mode algo
 
 ### 6-2. 실전 런
 
+먼저 CLI 가 준비됐는지 봅니다.
+
+```bash
+claude --version        # 안 되면 claude.com/claude-code 에서 설치·로그인
+```
+
 ```bash
 node server/export-brief.js --run --symbols 000660,035720 --mode algo
 ```
 
-**종목당 claude opus 를 최대 16번 호출합니다.** 수 분 걸립니다.
+**종목당 claude opus 를 최대 16번 호출합니다.** 수 분 걸립니다. 그래서 `--run`
+없이는 아예 돌지 않게 막아 두었습니다.
 
 | 옵션 | 뜻 |
 |---|---|
@@ -197,8 +249,11 @@ python ki_monitor.py facts --code 000660 --with-disclosures --indent 2
 
 | 증상 | 원인·조치 |
 |---|---|
-| `selftest` 실패 | 패키지 누락. `pip install pandas numpy scipy requests lxml` |
+| 무엇부터 볼지 모르겠다 | `python ki_monitor.py doctor` — `X` 항목이 곧 할 일입니다 |
+| `ModuleNotFoundError` · `selftest` 실패 | 패키지 누락. `pip install pandas numpy scipy requests lxml` |
+| `python` 을 못 찾음 (윈도우) | `py ki_monitor.py ...` 로 바꿔 보십시오 |
 | `ingest` 가 401 | KRX 는 키 발급과 별개로 **서비스별 URL 사용신청**이 필요합니다 |
+| `claude` 를 못 찾음 | 실전 런에만 필요합니다. 설치 전에는 `--demo` 로 배선만 확인하십시오 |
 | 에이전트 절이 "분석이 없습니다" | `export-brief.js` 를 먼저 돌리십시오. 경로는 `--brief` 로 지정 가능 |
 | `Yahoo chart HTTP 403` 인데 계속 진행됨 | 정상입니다. 원장의 KRX 공식 일봉으로 대체된 것이고 시세 줄에 그 사실이 표시됩니다 |
 | FLOW 가 "실행 시뮬레이션 산출 실패" | 관측기간이 짧습니다(85영업일 이상 필요). `ingest --from` 을 앞당기십시오 |
