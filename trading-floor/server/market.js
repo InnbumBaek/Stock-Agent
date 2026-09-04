@@ -251,7 +251,10 @@ function resolveSymbol(input) {
   //
   // 이 경로에는 USDT 무기한 계약이 없다 → perp·전광판이 없고, 20배 스캘핑의
   // 전제(체결 차트)가 성립하지 않는다. algo 모드로 쓰는 것이 맞다.
-  const krCodeMatch = raw.match(/^(\d{6})(?:\.(KS|KQ))?$/);
+  // 코드는 숫자 6자리가 기본이고, 2024년 이후 신규 상장은 영문자가 섞인
+  // 형태도 받는다 (예: 0082N0). 숫자만 받으면 그런 종목이 조용히 크립토로
+  // 해석돼 엉울한 곳을 조회한다.
+  const krCodeMatch = raw.match(/^(\d{6}|\d{4}[A-Z]\d)(?:\.(KS|KQ))?$/);
   if (krCodeMatch) {
     const code = krCodeMatch[1];
     return {

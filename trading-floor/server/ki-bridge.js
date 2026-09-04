@@ -108,7 +108,7 @@ function kiConfig(override) {
 function krCodeOf(input) {
   if (input == null) return null;
   const s = String(input).trim().toUpperCase();
-  const m = s.match(/^(\d{6})(?:\.(?:KS|KQ))?$/);
+  const m = s.match(/^(\d{6}|\d{4}[A-Z]\d)(?:\.(?:KS|KQ))?$/);
   return m ? m[1] : null;
 }
 

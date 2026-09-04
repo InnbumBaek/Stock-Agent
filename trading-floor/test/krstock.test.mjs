@@ -106,3 +106,34 @@ test('최종 판정자(ACE)도 원장 실측을 직접 받는다', () => {
   assert.ok(ki.DEFAULT_KI.injectInto.includes('ace'));
   assert.deepEqual(DEFAULTS.ki.injectInto, ki.DEFAULT_KI.injectInto);
 });
+
+// ---------------------------------------------------------------------------
+// 신형 단축코드 — 2024년 이후 신규 상장분은 영문자가 섞인다 (예: 1234A5)
+//
+// 숫자 6자리만 받으면 그런 종목이 조용히 크립토 티커로 해석돼 엉뚱한 곳을
+// 조회한다. 실패가 아니라 **잘못된 성공**이라 더 위험하다.
+// ---------------------------------------------------------------------------
+
+test('영문자가 섞인 KRX 신형 코드도 국내 주식으로 해석한다', () => {
+  for (const code of ['1234A5', '0000Z9']) {
+    const r = resolveSymbol(code);
+    assert.equal(r.kind, 'krstock', `${code} 는 krstock 이어야 한다`);
+    assert.equal(r.symbol, code);
+    assert.equal(r.generic, true);
+    assert.equal(ki.krCodeOf(code), code, `${code} 는 원장 조회 코드여야 한다`);
+  }
+});
+
+test('숫자 6자리 코드는 종전과 똑같이 해석된다 (회귀 방지)', () => {
+  const r = resolveSymbol('000250');
+  assert.equal(r.kind, 'krstock');
+  assert.equal(r.symbol, '000250');
+  assert.equal(ki.krCodeOf('000250.KQ'), '000250');
+});
+
+test('KRX 코드가 아닌 6글자 티커는 종전대로 국내 주식이 아니다', () => {
+  for (const s of ['BTCUSD', 'AAPL', 'ABCDEF']) {
+    assert.notEqual(resolveSymbol(s).kind, 'krstock', `${s} 가 krstock 이면 안 된다`);
+    assert.equal(ki.krCodeOf(s), null);
+  }
+});
