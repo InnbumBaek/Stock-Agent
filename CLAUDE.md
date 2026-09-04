@@ -45,6 +45,9 @@ trading-floor ──▶ ki.sqlite        AI 판정을 원장에 기록          
 `ki.sqlite` 는 공식 API 로 측정한 사실만 담는 장부다. AI 판정·가상 포지션·성적표를
 여기에 쓰면 다음번 측정이 오염되고, 그 오염은 되돌릴 수 없다.
 
+**KIS 실시간 스냅샷도 마찬가지다.** `CATALOG` 의 `kis.snap.*` 은 `persist=False` 다 —
+장중 값이 일봉 장부에 섞이면 같은 오염이다.
+
 ### 3. 원본에서 크게 벗어나지 않는다
 
 두 프로젝트는 각각 단독으로 떼어내도 돌아가야 한다. 통합 때문에 원본 구조를
@@ -59,6 +62,10 @@ trading-floor ──▶ ki.sqlite        AI 판정을 원장에 기록          
 - `--run` 없이는 에이전트를 절대 돌리지 않는다. 실전 런은 최대 16명 × claude opus 다.
 - 원장 일봉 폴백은 **야후가 실패했을 때만** 켜진다. 그것도 없으면 원래 오류를
   그대로 올린다 — 없는 값을 만들지 않는다.
+- `ki.realtime` 이 `false` 면 KIS 를 호출하지 않는다. `enabled` 와 **별개의 스위치**다.
+  실시간을 못 받으면 원장 종가 줄이 그대로 남는다 — 값을 지어내지 않는다.
+- **KIS 주문 API 는 화이트리스트에 없다.** KB 와 달리 KIS 는 같은 서버에 주문이 있다.
+  `allowed` 는 시세 두 개뿐이고, 그 밖의 이름은 전부 `OrderNotAllowed` 다.
 
 하나라도 깨지면 통합이 원본을 침범한 것이다. 회귀 확인은 §검증 참조.
 
@@ -86,8 +93,8 @@ diff 에 잡혀 실제 변경이 묻힌다. 편집 후 `file <파일>` 로 확�
 두 쪽 다 통과해야 통합이 성립한다.
 
 ```bash
-cd stock-monitor && python ki_monitor.py selftest   # 86개 (키·네트워크 불필요)
-cd trading-floor && npm test                         # 130개
+cd stock-monitor && python ki_monitor.py selftest   # 95개 (키·네트워크 불필요)
+cd trading-floor && npm test                         # 148개
 ```
 
 통합 계층을 건드렸다면 **회귀 확인**까지 해라 — 에이전트 절을 끈 리포트가 통합 이전

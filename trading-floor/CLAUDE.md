@@ -11,7 +11,7 @@ AI 에이전트들이 시장 데이터를 분석하고 토론해 매매 판정�
 node server/server.js          # http://localhost:8000
 # 포트 충돌 시: PORT=8123 node server/server.js
 # Windows: start-floor.cmd 더블클릭
-npm test                       # 130개 단위 테스트
+npm test                       # 148개 단위 테스트
 ```
 
 의존성 설치 불필요 — `package.json`에 dependencies가 없고 Node 내장 모듈만 쓴다.
@@ -43,7 +43,7 @@ reports/          런마다 마크다운 리포트 + 같은 이름의 .json(기�
 | 에이전트 | 역할 |
 |---|---|
 | TARO / DIANA / NOVA / VIBE | 기술적 · 기본적 · 뉴스 · 센티먼트 |
-| **FLOW / FILING** | 유동성·체결 / 공시·자본구조 — **원장 실측이 있어야 돈다** |
+| **FLOW / FILING** | 유동성·체결 / 공시·자본구조 — **원장 실측이 있어야 돈다**<br>FLOW 는 KIS 실시간 호가도 단독으로 받는다 |
 | BULL ⇄ BEAR | 매수/매도 논거 4턴 토론 |
 | BLITZ / GUARD | 스캘퍼 / 리스크 관리 |
 | RISKY / SAFE / **RED** / NEUTRAL | 리스크 위원회 — RED 는 **가정 반대심문**, 원장 실측 필요 |
@@ -63,12 +63,19 @@ reports/          런마다 마크다운 리포트 + 같은 이름의 .json(기�
 | `scalp` | TARO·VIBE → BLITZ → GUARD → ACE | 20배 단타. PASS(관망) 가능 |
 | `attack` | scalp와 동일 | **PASS·HOLD 금지 — 반드시 LONG/SHORT.** 시연·영상용 |
 
-## 데이터 소스 (전부 키 불필요)
+## 데이터 소스
+
+**공개 API (키 불필요)**
 
 - 암호화폐: Binance klines/ticker, CoinGecko, alternative.me 공포탐욕지수
 - 주식: Yahoo Finance chart API
 - 뉴스: Google News RSS (한국어)
 - 환율: Yahoo `KRW=X` → 실패 시 open.er-api.com
+
+**한국투자증권 KIS (키 필요 · 기본 꺼짐)** — `ki.realtime` 을 켤 때만. 원장이 일별
+종가라 며칠 묵을 수 있는 그 신선도만 메운다. 현재가는 시세 줄로 전원이 보고, 호가·
+잔량·스프레드는 FLOW 만 본다. **주문 API 는 화이트리스트에 없다** — KB 와 달리 KIS 는
+같은 서버에 주문이 있어서, 시세 두 개 밖의 이름은 전부 `OrderNotAllowed` 다.
 
 ### 한국 주식의 이중 가격 체계 — 여기가 이 프로젝트의 핵심
 

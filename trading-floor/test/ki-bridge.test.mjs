@@ -369,3 +369,145 @@ test('요청한 코드와 다른 종목의 값을 섞지 않는다', () => {
   assert.deepEqual(ki.formatKiLines(facts, '000660'), []);
   assert.ok(ki.formatKiLines(facts, '005930').length > 0);
 });
+
+// ---------------------------------------------------------------------------
+// 실시간 시세 (KIS) — ki.quote/1
+//
+// 원장은 일별 종가다. 며칠 지난 값을 현재가로 읽으면 목표가·괴리·손익비가
+// 통째로 틀어지므로, 그 신선도만 실시간으로 메운다. 대신 **켜야 돈다.**
+// ---------------------------------------------------------------------------
+
+const RT = { enabled: true, realtime: true, cacheMin: 30, timeoutSec: 5, quoteCacheSec: 20 };
+
+function quoteJson(over = {}) {
+  return JSON.stringify({
+    ok: true,
+    schema: 'ki.quote/1',
+    code: '000660',
+    source: '한국투자증권 KIS Open API — 국내주식 현재가 · 호가',
+    realtime: true,
+    market_open: true,
+    checks: [],
+    quote: {
+      price: 186200, open: 185000, high: 190000, low: 180000,
+      prev_close: 185000, volume: 1234567, value: 2.3e11,
+      bid: 186100, ask: 186300, bid_qty: 1200, ask_qty: 800,
+      change_pct: 0.6486, spread_bp: 10.74, queue_imbalance: 0.2,
+      ts: '2026-09-04T13:20:00',
+    },
+    ...over,
+  });
+}
+
+test('실시간이 꺼져 있으면 파이썬을 스폰하지 않는다 (옵트인)', async () => {
+  reset();
+  const spawn = spyingSpawn({ stdout: quoteJson() });
+  ki._setSpawn(spawn);
+  // ki.enabled 는 켜져 있어도 realtime 이 꺼져 있으면 돌지 않아야 한다.
+  assert.equal(await ki.fetchKiQuote('000660', { cfg: ON }), null);
+  assert.equal(spawn.calls.length, 0, '실시간은 명시적으로 켤 때만 돈다');
+  reset();
+});
+
+test('실시간 기본값은 꺼짐이다', () => {
+  assert.equal(ki.DEFAULT_KI.realtime, false);
+  assert.equal(DEFAULTS.ki.realtime, false);
+});
+
+test('quote 를 부를 때 quote 서브커맨드를 쓴다', async () => {
+  reset();
+  const spawn = spyingSpawn({ stdout: quoteJson() });
+  ki._setSpawn(spawn);
+  const r = await ki.fetchKiQuote('000660', { cfg: RT });
+  assert.equal(r.schema, 'ki.quote/1');
+  const args = spawn.calls[0].args;
+  assert.ok(args.includes('quote'), `실제 인자: ${args.join(' ')}`);
+  assert.ok(args.includes('000660'));
+  assert.ok(!args.includes('--no-orderbook'), '기본은 호가까지 받는다');
+  reset();
+});
+
+test('호가를 끄면 --no-orderbook 을 넘긴다 (호출 절반)', async () => {
+  reset();
+  const spawn = spyingSpawn({ stdout: quoteJson() });
+  ki._setSpawn(spawn);
+  await ki.fetchKiQuote('000660', { cfg: { ...RT, realtimeOrderbook: false } });
+  assert.ok(spawn.calls[0].args.includes('--no-orderbook'));
+  reset();
+});
+
+test('실시간 캐시는 facts 캐시와 섞이지 않는다', async () => {
+  reset();
+  const spawn = spyingSpawn((bin, args) => ({
+    stdout: args.includes('quote') ? quoteJson() : factsJson(),
+  }));
+  ki._setSpawn(spawn);
+  const f = await ki.fetchKiFacts('000660', { cfg: RT });
+  const q = await ki.fetchKiQuote('000660', { cfg: RT });
+  assert.equal(f.schema, 'ki.facts/1');
+  assert.equal(q.schema, 'ki.quote/1');
+  reset();
+});
+
+test('실패한 조회는 null 이고 원장 경로를 막지 않는다', async () => {
+  reset();
+  ki._setSpawn(
+    spyingSpawn({
+      stdout: JSON.stringify({
+        ok: false, schema: 'ki.quote/1', code: '000660',
+        reason: 'KIS_APP_KEY 가 .env 에 없습니다.',
+      }),
+    })
+  );
+  assert.equal(await ki.fetchKiQuote('000660', { cfg: RT }), null);
+  reset();
+});
+
+// ------------------------------------------------------------------ 시세 줄
+
+test('실시간 시세 줄은 실시간임을 밝힌다', () => {
+  const line = ki.formatKiQuoteLine(JSON.parse(quoteJson()), 'SK하이닉스');
+  assert.ok(line.includes('SK하이닉스'));
+  assert.ok(line.includes('₩186,200'));
+  assert.ok(line.includes('+0.65%'));
+  assert.ok(line.includes('장중 실시간'));
+  assert.ok(line.includes('원장의 일별 종가가 아니라'), '성격을 밝혀야 한다');
+});
+
+test('장 마감 후에는 마감했다고 적는다', () => {
+  const line = ki.formatKiQuoteLine(JSON.parse(quoteJson({ market_open: false })), 'X');
+  assert.ok(line.includes('장 마감 후'));
+  assert.ok(!line.includes('장중 실시간'));
+});
+
+test('실시간이 없으면 시세 줄을 만들지 않는다 (원장으로 폴백)', () => {
+  assert.equal(ki.formatKiQuoteLine(null, 'X'), null);
+  assert.equal(ki.formatKiQuoteLine({ ok: false }, 'X'), null);
+  assert.equal(ki.formatKiQuoteLine(JSON.parse(quoteJson({ quote: null })), 'X'), null);
+});
+
+// -------------------------------------------------------------- 미시구조 블록
+
+test('호가 블록은 잔량·스프레드·불균형을 함께 낸다', () => {
+  const out = ki.formatKiMicroLines(JSON.parse(quoteJson())).join('\n');
+  assert.ok(out.startsWith('[실시간 호가'));
+  assert.ok(out.includes('매수 186,100원 / 매도 186,300원'));
+  assert.ok(out.includes('1,200주'));
+  assert.ok(out.includes('10.7bp'));
+  assert.ok(out.includes('+20.0%'));
+  assert.ok(out.includes('1호가만 본 값'), '한계를 밝혀야 한다');
+});
+
+test('호가가 없으면 블록 자체를 만들지 않는다', () => {
+  const p = JSON.parse(quoteJson());
+  p.quote.bid = null;
+  p.quote.ask = null;
+  assert.deepEqual(ki.formatKiMicroLines(p), []);
+  assert.deepEqual(ki.formatKiMicroLines(null), []);
+});
+
+test('장이 닫혀 있으면 마지막 호가라고 적는다', () => {
+  const out = ki.formatKiMicroLines(JSON.parse(quoteJson({ market_open: false }))).join('\n');
+  assert.ok(out.includes('마지막 호가'));
+  assert.ok(out.includes('체결된다는 뜻이 아니다'));
+});

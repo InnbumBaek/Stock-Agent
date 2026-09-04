@@ -250,3 +250,55 @@ test('실측이 있을 때만 블록이 붙는다 (헤더 기준 재확인)', ()
   assert.ok(hasBlock(buildPrompt('filing', ctx), '[자본구조'));
   assert.ok(hasBlock(buildPrompt('red', ctx), '[이 원장이 재지 못한 것]'));
 });
+
+// ---------------------------------------------------------------------------
+// 실시간 호가 — 분업의 연장
+//
+// 실시간 '현재가'는 시세 줄로 전원이 본다(그게 신선도의 문제라서). 하지만
+// 호가·잔량·스프레드는 '지금 이 가격에 실제로 얼마나 나가는가'를 보는 값이라
+// 유동성·체결을 맡은 FLOW 의 재료다. 여러 명이 같은 것을 보면 의견이 상관된다.
+// ---------------------------------------------------------------------------
+
+function quoteFixture(over = {}) {
+  return {
+    ok: true,
+    schema: 'ki.quote/1',
+    code: '000250',
+    market_open: true,
+    quote: {
+      price: 186200, open: 185000, high: 190000, low: 180000, prev_close: 185000,
+      bid: 186100, ask: 186300, bid_qty: 1200, ask_qty: 800,
+      change_pct: 0.65, spread_bp: 10.74, queue_imbalance: 0.2,
+      ts: '2026-09-04T13:20:00',
+    },
+    ...over,
+  };
+}
+
+test('실시간 호가는 FLOW 만 본다', () => {
+  const ctx = CTX();
+  ctx.market.kiQuote = quoteFixture();
+  const seen = AGENTS.map((a) => a.id).filter((id) =>
+    buildPrompt(id, ctx).includes('[실시간 호가 —')
+  );
+  assert.deepEqual(seen, ['flow'], `호가를 본 역할: ${seen.join(',')}`);
+});
+
+test('실시간이 없으면 아무에게도 호가 블록이 붙지 않는다', () => {
+  const ctx = CTX(); // kiQuote 없음
+  for (const a of AGENTS) {
+    assert.ok(
+      !hasBlock(buildPrompt(a.id, ctx), '[실시간 호가'),
+      `${a.id} 에 호가 블록이 붙으면 안 된다`
+    );
+  }
+});
+
+test('FLOW 는 호가와 실행 시뮬레이션을 함께 본다', () => {
+  const ctx = CTX();
+  ctx.market.kiQuote = quoteFixture();
+  const p = buildPrompt('flow', ctx);
+  assert.ok(hasBlock(p, '[실시간 호가'));
+  assert.ok(hasBlock(p, '[실행 시뮬레이션'));
+  assert.ok(p.includes('1호가만 본 값'), '한계도 함께 가야 한다');
+});

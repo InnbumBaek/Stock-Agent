@@ -3,7 +3,8 @@
 """
 ki_monitor.py — 상장 포트폴리오사 회수 판단 리포트 자동화 (단일 파일)
 
-한국거래소 KRX Open API · KB증권 Open API · DART 전자공시 세 개만 사용합니다.
+한국거래소 KRX Open API · 한국투자증권 KIS Open API · DART 전자공시
+세 개만 사용합니다.
 설정 파일도, 패키지 폴더도 없습니다. 이 파일 하나면 전부 돌아갑니다.
 
   python ki_monitor.py selftest              # 계산 검증 (키 불필요)
@@ -11,7 +12,8 @@ ki_monitor.py — 상장 포트폴리오사 회수 판단 리포트 자동화 (�
   python ki_monitor.py check-auth            # 세 API 키 로딩 확인
   python ki_monitor.py ingest --from 20240101
   python ki_monitor.py report
-  python ki_monitor.py watch                 # 장중 폴링 알림
+  python ki_monitor.py watch                 # 장중 폴링 알림 (KIS 실시간)
+  python ki_monitor.py quote --code 000660   # 실시간 시세 JSON (통합용)
   python ki_monitor.py init                  # .env / positions.csv 뼈대 생성
 
 필요 패키지:  pandas numpy scipy requests jinja2 weasyprint lxml
@@ -19,7 +21,7 @@ ki_monitor.py — 상장 포트폴리오사 회수 판단 리포트 자동화 (�
   (lxml 은 DART XML 파싱에 필요합니다)
 
 키는 같은 폴더의 .env 파일에만 둡니다. 코드·깃·채팅 어디에도 붙여넣지 마십시오.
-  KRX_API_KEY=...   DART_API_KEY=...   KB_APP_KEY=...   KB_APP_SECRET=...
+  KRX_API_KEY=...   DART_API_KEY=...   KIS_APP_KEY=...   KIS_APP_SECRET=...
 """
 from __future__ import annotations
 
@@ -205,26 +207,33 @@ DART = {
     },
 }
 
-# 2026-08-13 실측 확인 결과 — 추정이 아니라 확인된 사실입니다.
-#   · openapi.kbsec.com 은 DigiCert 발급 *.kbsec.com 인증서를 가진 진짜 KB 도메인
-#   · 다만 이 호스트는 API 게이트웨이가 아니라 'KB증권 Open API 서비스 포탈'(웹사이트)
-#     — /oauth2/token 을 포함해 어떤 경로로 POST 해도 HTML 이 돌아옵니다
-#   · 포털이 공개하는 API 카탈로그(/api/apis/public)에는 20개가 등록돼 있고
-#     경로 체계는 /baas/v2/<코드> 입니다 (BaaS = 제휴사용 브로커리지)
-#   · 20개 전부 계좌개설·주문·퇴직연금·약관동의 계열입니다.
-#     >>> 시세(현재가·호가) API 가 하나도 없습니다 <<<
-#   · 따라서 이 포털로는 실시간 시세도, NXT 통합시세도 얻을 수 없습니다.
-#   · 아래 field_map 의 항목명(stck_prpr, acml_tr_pbmn, bidp1 …)은 KB 가 아니라
-#     한국투자증권 KIS Open API 의 스키마입니다. 원 코드가 KIS 문서를 보고 적은 것으로
-#     보입니다. KB 에 그대로 쓰면 맞을 리가 없습니다.
-KB = {
-    "base_url": "https://openapi.kbsec.com",
-    "token_path": "/oauth2/token",
-    "verified": False,
-    "quote_api_exists": False,      # 실측: 공개 카탈로그에 시세 API 없음
-    "portal_catalog": "/api/apis/public",
-    "allowed": {},                  # 붙일 수 있는 읽기 전용 시세 엔드포인트가 없습니다
-    "denied": ["order", "order_modify", "order_cancel", "balance", "overseas"],
+# 실시간 시세는 한국투자증권 KIS Open API 로 받습니다.
+#
+# 원래 이 자리에는 KB증권이 있었습니다. 2026-08-13 실측에서 openapi.kbsec.com 은
+# API 게이트웨이가 아니라 서비스 포탈(웹사이트)이고, 공개 카탈로그 20개가 전부
+# 계좌개설·주문·퇴직연금 계열이라 >>> 시세 API 가 하나도 없다 <<< 는 것이
+# 확인됐습니다. 붙일 수 없는 것을 붙이려던 자리였습니다.
+#
+# 아래 field_map 의 항목명(stck_prpr, acml_tr_pbmn, bidp1 …)은 원래부터 KIS
+# 스키마였습니다 — 원 코드가 KIS 문서를 보고 적어 둔 것입니다. 그래서 여기는
+# 새로 만든 것이 아니라 **처음부터 맞던 자리에 맞는 서버를 꽂는 것**입니다.
+#
+# 주의 — KB 와 달리 KIS 에는 실제 주문 API 가 있습니다. 모니터링 시스템에
+# 주문 권한이 붙으면 버그 하나의 결과가 '틀린 숫자'에서 '틀린 거래'로 바뀝니다.
+# allowed 화이트리스트에 시세 두 개만 두고, 그 밖은 전부 거부합니다.
+KIS = {
+    "base_url": "https://openapi.koreainvestment.com:9443",
+    "token_path": "/oauth2/tokenP",
+    "verified": False,              # 실응답 1회 대조 전까지 False (kis_sanity 가 검산)
+    "quote_api_exists": True,
+    "token_cache": ".kis_token.json",   # 프로세스가 매번 새로 뜨므로 파일에 캐시
+    "allowed": {
+        "quote":     "/uapi/domestic-stock/v1/quotations/inquire-price",
+        "orderbook": "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn",
+    },
+    "tr_id": {"quote": "FHKST01010100", "orderbook": "FHKST01010200"},
+    "denied": ["order", "order_modify", "order_cancel", "balance", "overseas",
+               "order_credit", "order_rvsecncl", "psbl_order", "trading"],
     "field_map": {
         "stck_prpr": "price", "stck_oprc": "open", "stck_hgpr": "high",
         "stck_lwpr": "low", "stck_sdpr": "prev_close", "acml_vol": "volume",
@@ -262,11 +271,13 @@ CATALOG = [
     ("dart.ds005.cb_amount",     "DART/DS005/CB발행",     "KRW",    "event",     (11,), False, True),
     ("dart.ds005.cb_conv_price", "DART/DS005/전환가액",   "KRW",    "event",     (11,), False, True),
     ("dart.ds001.rcept_dt",      "DART/DS001/공시검색",   "date",   "event",     (12,), True,  True),
-    ("kb.snap.price",   "KB/시세조회", "KRW",    "intraday", (8,), False, False),
-    ("kb.snap.bid",     "KB/시세조회", "KRW",    "intraday", (8,), False, False),
-    ("kb.snap.ask",     "KB/시세조회", "KRW",    "intraday", (8,), False, False),
-    ("kb.snap.bid_qty", "KB/시세조회", "shares", "intraday", (8,), False, False),
-    ("kb.snap.ask_qty", "KB/시세조회", "shares", "intraday", (8,), False, False),
+    # persist=False — 실시간 스냅샷은 원장에 쓰지 않습니다. 원장은 KRX 공식
+    # 일봉만 담는 장부이고, 장중 값이 섞이면 다음 측정이 오염됩니다.
+    ("kis.snap.price",   "KIS/시세조회", "KRW",    "intraday", (8,), False, False),
+    ("kis.snap.bid",     "KIS/시세조회", "KRW",    "intraday", (8,), False, False),
+    ("kis.snap.ask",     "KIS/시세조회", "KRW",    "intraday", (8,), False, False),
+    ("kis.snap.bid_qty", "KIS/시세조회", "shares", "intraday", (8,), False, False),
+    ("kis.snap.ask_qty", "KIS/시세조회", "shares", "intraday", (8,), False, False),
 ]
 VALID_UNITS = {"KRW", "KRW_1000", "shares", "pct", "point", "text", "date", "ratio", "bp"}
 
@@ -1162,64 +1173,140 @@ def dart_report_item(name: str, corp_code: str, year: str,
     return pd.DataFrame(body.get("list", []))
 
 
-# ── KB증권 (읽기 전용) ─────────────────────────────────────────────────
+# ── 한국투자증권 KIS (읽기 전용) ───────────────────────────────────────
 class OrderNotAllowed(RuntimeError):
     """주문 계열 호출 시도. 설계상 절대 발생하면 안 됩니다."""
 
 
-class KBClient:
+class KISClient:
     """모니터링 시스템에 주문 권한이 붙으면 버그 하나의 결과가
-    '틀린 숫자'에서 '틀린 거래'로 바뀝니다. 그래서 호출 경로를 막아 둡니다."""
+    '틀린 숫자'에서 '틀린 거래'로 바뀝니다. 그래서 호출 경로를 막아 둡니다.
+
+    KIS 는 KB 와 달리 같은 서버에 실제 주문 API 가 있습니다. 화이트리스트에
+    없는 이름은 전부 거부하고, 주문 계열 이름은 따로 한 번 더 막습니다."""
 
     def __init__(self) -> None:
         self._token, self._exp = None, 0.0
 
-    def _auth_header(self) -> dict:
+    # 토큰 --------------------------------------------------------------
+    #
+    # KIS 토큰은 유효기간이 하루이고, 짧은 간격으로 다시 발급받으면 거부됩니다
+    # (EGW00133). 통합 계층은 분석 한 번에 파이썬을 여러 번 새로 띄우므로
+    # 메모리 캐시만으로는 매번 새 토큰을 받게 됩니다. 그래서 파일에 둡니다.
+    def _token_file(self):
+        return ROOT / KIS["token_cache"]
+
+    def _load_cached(self) -> str | None:
+        p = self._token_file()
+        if not p.exists():
+            return None
+        try:
+            c = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:                               # noqa: BLE001
+            return None
+        if float(c.get("exp", 0)) - 300 < time.time():  # 5분 여유를 둡니다
+            return None
+        return c.get("token") or None
+
+    def _store(self, token: str, exp: float) -> None:
+        p = self._token_file()
+        try:
+            p.write_text(json.dumps({"token": token, "exp": exp}), encoding="utf-8")
+            os.chmod(p, 0o600)          # 토큰은 자격증명입니다
+        except Exception:                               # noqa: BLE001
+            pass                        # 캐시 실패는 치명적이지 않습니다
+
+    def _access_token(self) -> str:
         if self._token and time.time() < self._exp - 60:
-            return {"Authorization": f"Bearer {self._token}"}
+            return self._token
+        cached = self._load_cached()
+        if cached:
+            self._token = cached
+            self._exp = time.time() + 3600
+            return cached
         requests = _requests()
-        r = requests.post(KB["base_url"] + KB["token_path"], timeout=20, json={
+        r = requests.post(KIS["base_url"] + KIS["token_path"], timeout=20, json={
             "grant_type": "client_credentials",
-            "appkey": api_key("KB_APP_KEY"),
-            "appsecret": api_key("KB_APP_SECRET"),
+            "appkey": api_key("KIS_APP_KEY"),
+            "appsecret": api_key("KIS_APP_SECRET"),
         })
         r.raise_for_status()
         body = r.json()
         self._token = body["access_token"]
-        self._exp = time.time() + float(body.get("expires_in", 3600))
-        return {"Authorization": f"Bearer {self._token}"}
+        self._exp = time.time() + float(body.get("expires_in", 86400))
+        self._store(self._token, self._exp)
+        return self._token
 
-    def _call(self, endpoint: str, **params) -> dict:
-        if endpoint in KB["denied"]:
+    def _headers(self, endpoint: str) -> dict:
+        return {
+            "content-type": "application/json; charset=utf-8",
+            "authorization": f"Bearer {self._access_token()}",
+            "appkey": api_key("KIS_APP_KEY"),
+            "appsecret": api_key("KIS_APP_SECRET"),
+            "tr_id": KIS["tr_id"][endpoint],
+            "custtype": "P",
+        }
+
+    def _call(self, endpoint: str, code: str) -> dict:
+        if endpoint in KIS["denied"]:
             raise OrderNotAllowed(f"'{endpoint}' 는 호출하지 않습니다 (읽기 전용 설계).")
-        if endpoint not in KB["allowed"]:
+        if endpoint not in KIS["allowed"]:
             raise OrderNotAllowed(f"화이트리스트에 없는 엔드포인트: {endpoint}")
         requests = _requests()
-        r = requests.get(KB["base_url"] + KB["allowed"][endpoint],
-                         headers=self._auth_header(), params=params, timeout=15)
+        r = requests.get(KIS["base_url"] + KIS["allowed"][endpoint],
+                         headers=self._headers(endpoint), timeout=15,
+                         params={"FID_COND_MRKT_DIV_CODE": "J",
+                                 "FID_INPUT_ISCD": str(code).strip()})
         r.raise_for_status()
-        return r.json()
+        body = r.json()
+        # KIS 는 HTTP 200 에 실패를 담아 보냅니다. rt_cd 가 '0' 이 아니면 실패입니다.
+        if str(body.get("rt_cd", "0")) != "0":
+            raise RuntimeError(f"KIS {endpoint} 실패: "
+                               f"{body.get('msg_cd', '')} {body.get('msg1', '')}".strip())
+        return body
 
-    def quote(self, code: str) -> dict:
-        return kb_map_quote(self._call("quote", code=code))
+    def quote(self, code: str, with_orderbook: bool = True) -> dict:
+        """현재가 + (선택) 호가. 호가가 실패해도 현재가는 살립니다."""
+        out = kis_map_quote(self._call("quote", code))
+        if with_orderbook:
+            try:
+                out.update(kis_map_orderbook(self._call("orderbook", code)))
+            except Exception:                           # noqa: BLE001
+                pass                    # 호가 없이도 현재가만으로 쓸 수 있습니다
+        return out
 
 
-def kb_map_quote(raw: dict) -> dict:
-    if not KB["verified"]:
-        print("  [경고] KB verified=False — 응답 필드 매핑을 명세서와 대조하십시오.")
+def _kis_num(v):
+    try:
+        return float(str(v).replace(",", "")) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def kis_map_quote(raw: dict) -> dict:
+    """현재가 응답(output)을 내부 이름으로 옮깁니다."""
+    if not KIS["verified"]:
+        print("  [경고] KIS verified=False — 응답 필드 매핑을 명세서와 대조하십시오.",
+              file=sys.stderr)
     body = raw.get("output", raw)
     out = {}
-    for src, dst in KB["field_map"].items():
-        v = body.get(src)
-        try:
-            out[dst] = float(str(v).replace(",", "")) if v is not None else None
-        except (TypeError, ValueError):
-            out[dst] = None
+    for src, dst in KIS["field_map"].items():
+        if dst in ("bid", "ask", "bid_qty", "ask_qty"):
+            continue                    # 호가는 다른 엔드포인트에서 옵니다
+        out[dst] = _kis_num(body.get(src))
     out["ts"] = datetime.now().isoformat(timespec="seconds")
     return out
 
 
-def kb_sanity(q: dict) -> list[str]:
+def kis_map_orderbook(raw: dict) -> dict:
+    """호가 응답(output1)에서 1호가만 옮깁니다. 잔량까지 봅니다."""
+    body = raw.get("output1", raw.get("output", raw))
+    return {"bid": _kis_num(body.get("bidp1")), "ask": _kis_num(body.get("askp1")),
+            "bid_qty": _kis_num(body.get("bidp_rsqn1")),
+            "ask_qty": _kis_num(body.get("askp_rsqn1"))}
+
+
+def kis_sanity(q: dict) -> list[str]:
     """연결 직후 필수 검산. 조용히 틀리는 것을 잡습니다."""
     p = []
     if None in (q.get("price"), q.get("high"), q.get("low")):
@@ -1876,7 +1963,7 @@ def in_market_hours(now: datetime = None) -> bool:
 
 
 def watch(positions: dict, once: bool = False) -> None:
-    client, ring, fired = KBClient(), RingBuffer(list(positions)), set()
+    client, ring, fired = KISClient(), RingBuffer(list(positions)), set()
     today = date.today().isoformat()
     while True:
         # 날짜가 바뀌면 발화 기록을 비웁니다. 이걸 놓치면 하루 한 번 제한이
@@ -1893,7 +1980,7 @@ def watch(positions: dict, once: bool = False) -> None:
             except Exception as e:                       # noqa: BLE001
                 notify("OPS", code, f"조회 실패: {e}")
                 continue
-            problems = kb_sanity(q)
+            problems = kis_sanity(q)
             if problems:
                 notify("OPS", code, "검산 실패: " + "; ".join(problems))
                 continue
@@ -4599,7 +4686,33 @@ def selftest() -> int:
                           "price": 100, "volume": 1000, "value": 100000},
                          None, [])["persisted"] is False))
     check("주문 API 는 호출 불가", lambda: _expect_raises(
-        OrderNotAllowed, lambda: KBClient()._call("order", code="005930")))
+        OrderNotAllowed, lambda: KISClient()._call("order", "005930")))
+    check("화이트리스트 밖 이름도 호출 불가", lambda: _expect_raises(
+        OrderNotAllowed, lambda: KISClient()._call("inquire-balance", "005930")))
+    check("시세 화이트리스트는 두 개뿐", lambda: _assert(
+        set(KIS["allowed"]) == {"quote", "orderbook"}))
+    check("실시간 스냅샷은 원장에 쓰지 않는다", lambda: _assert(
+        all(not persist for key, _s, _u, _f, _sec, _r, persist in CATALOG
+            if key.startswith("kis.snap."))))
+    check("KIS 현재가 매핑 (문자열·쉼표를 숫자로)", lambda: _assert(
+        kis_map_quote({"output": {"stck_prpr": "186,200", "stck_hgpr": "190000",
+                                  "stck_lwpr": "180000", "stck_sdpr": "185000",
+                                  "acml_vol": "1,234,567"}})["price"] == 186200.0))
+    check("KIS 현재가 응답에 호가를 섞지 않는다", lambda: _assert(
+        "bid" not in kis_map_quote({"output": {"stck_prpr": "100"}})))
+    check("KIS 호가 매핑은 1호가와 잔량", lambda: _assert(
+        kis_map_orderbook({"output1": {"bidp1": "99", "askp1": "101",
+                                       "bidp_rsqn1": "10", "askp_rsqn1": "5"}})
+        == {"bid": 99.0, "ask": 101.0, "bid_qty": 10.0, "ask_qty": 5.0}))
+    check("KIS 검산이 호가 역전을 잡는다", lambda: _assert(
+        "매도호가 < 매수호가 — bid/ask 뒤바뀜" in kis_sanity(
+            {"price": 100, "high": 110, "low": 90, "prev_close": 100,
+             "bid": 101, "ask": 99})))
+    check("KIS 검산이 범위 밖 현재가를 잡는다", lambda: _assert(
+        kis_sanity({"price": 999, "high": 110, "low": 90, "prev_close": 100})))
+    check("quote 는 키가 없으면 예외 대신 ok:false", lambda: _assert(
+        quote_payload("000660")["ok"] is False
+        if not (has_key("KIS_APP_KEY") and has_key("KIS_APP_SECRET")) else True))
     check("카탈로그 단위 미확정 0", lambda: _assert(not catalog_audit()["problems"]))
     # 종가 알림
     check("등락률은 수정주가, 목표단가는 원주가", lambda: _assert(
@@ -5147,7 +5260,7 @@ POSITIONS_SAMPLE = """code,name,qty,cost,target_price
 000660,샘플B,5000,120000,220000
 035720,샘플C,8000,45000,80000
 """
-ENV_SAMPLE = ("KRX_API_KEY=\nDART_API_KEY=\nKB_APP_KEY=\nKB_APP_SECRET=\n"
+ENV_SAMPLE = ("KRX_API_KEY=\nDART_API_KEY=\nKIS_APP_KEY=\nKIS_APP_SECRET=\n"
               "# 해외 매크로 (선택) — https://fredaccount.stlouisfed.org/apikeys\n"
               "FRED_API_KEY=\n")
 
@@ -5195,9 +5308,11 @@ def cmd_doctor() -> int:
     print("\n[2] API 키  (.env 에서만 읽습니다. 값은 출력하지 않습니다)")
     for name, why in (("KRX_API_KEY", "시세·지수·국고채·선물 (필수)"),
                       ("DART_API_KEY", "공시·재무 (필수)"),
+                      ("KIS_APP_KEY", "실시간 시세 (선택)"),
+                      ("KIS_APP_SECRET", "실시간 시세 (선택)"),
                       ("FRED_API_KEY", "해외 매크로 (선택)")):
         has = has_key(name)
-        if name != "FRED_API_KEY":
+        if name not in ("FRED_API_KEY", "KIS_APP_KEY", "KIS_APP_SECRET"):
             ok &= has
         print(f"    {'O' if has else 'X'}  {name:<14} {why}")
 
@@ -5236,13 +5351,14 @@ def cmd_check_auth(live: bool = False) -> int:
     print("-" * 46)
     ok = True
     for label, name in (("KRX", "KRX_API_KEY"), ("DART", "DART_API_KEY"),
-                        ("KB(app)", "KB_APP_KEY"), ("KB(secret)", "KB_APP_SECRET")):
+                        ("KIS(app)", "KIS_APP_KEY"),
+                        ("KIS(secret)", "KIS_APP_SECRET")):
         present = has_key(name)
         ok = ok and present
         print(f"{label:<12}: {'O' if present else 'X'}")
     print("-" * 46)
     print(f"KRX 필드매핑 : {'검증 완료' if KRX['verified'] else '미검증 — 명세서 대조 필요'}")
-    print(f"KB 필드매핑  : {'검증 완료' if KB['verified'] else '미검증 — 명세서 대조 필요'}")
+    print(f"KIS 필드매핑 : {'검증 완료' if KIS['verified'] else '미검증 — 명세서 대조 필요'}")
     if live and ok:
         print("-" * 46)
         try:
@@ -6024,6 +6140,88 @@ def cmd_candles(code: str, days: int = 200, raw: bool = False,
     return 0 if payload.get("ok") else 1
 
 
+# ── 통합 계층 (1-c) — 실시간 시세 (KIS) ───────────────────────────────
+#
+# 원장은 일별 종가입니다. 며칠 지난 값을 현재가로 읽으면 목표가·괴리·손익비가
+# 통째로 틀어집니다. 그 신선도만 KIS 실시간으로 메웁니다.
+#
+# 이 명령이 지키는 것
+#
+#   1. **원장에 쓰지 않습니다.** 받은 값을 그대로 stdout 으로 냅니다.
+#      CATALOG 의 kis.snap.* 이 persist=False 인 것과 같은 이유입니다.
+#   2. **판단하지 않습니다.** 등락률까지가 측정이고, 비싸다·싸다는 데스크의 일입니다.
+#   3. **없으면 없다고 합니다.** 장 마감 후·휴장일·키 없음·검산 실패는 전부
+#      ok:false 에 reason 을 담아 돌려줍니다. 원장 종가로 갈아타는 것은 부르는
+#      쪽(브리지)의 판단이고, 이 명령이 값을 지어내지는 않습니다.
+#   4. **stdout 은 JSON 만.** 경고·진단은 전부 stderr 로 나갑니다.
+QUOTE_SCHEMA = "ki.quote/1"
+
+
+def quote_payload(code: str, with_orderbook: bool = True) -> dict:
+    """실시간 시세 한 종목. 실패해도 예외를 올리지 않고 ok:false 로 돌려줍니다."""
+    code = str(code).strip()
+    out = {"ok": False, "schema": QUOTE_SCHEMA, "code": code,
+           "source": "한국투자증권 KIS Open API — 국내주식 현재가"
+                     + (" · 호가" if with_orderbook else ""),
+           "realtime": True, "market_open": in_market_hours(),
+           "quote": None, "checks": [], "reason": None}
+    for name in ("KIS_APP_KEY", "KIS_APP_SECRET"):
+        if not has_key(name):
+            out["reason"] = f"{name} 가 .env 에 없습니다."
+            return out
+    try:
+        q = KISClient().quote(code, with_orderbook=with_orderbook)
+    except OrderNotAllowed:
+        raise                           # 설계 위반은 조용히 넘기지 않습니다
+    except Exception as e:              # noqa: BLE001
+        out["reason"] = f"{type(e).__name__}: {e}"
+        return out
+
+    problems = kis_sanity(q)
+    out["checks"] = problems
+    if problems:
+        # 검산에 걸린 값은 내보내지 않습니다. 틀린 현재가는 없는 것보다 나쁩니다.
+        out["reason"] = "검산 실패: " + "; ".join(problems)
+        return out
+
+    prev = q.get("prev_close")
+    px = q.get("price")
+    q["change_pct"] = ((px / prev - 1.0) * 100.0
+                       if prev not in (None, 0) and px is not None else None)
+    if q.get("bid") is not None and q.get("ask") is not None and q["ask"] > 0:
+        mid = (q["bid"] + q["ask"]) / 2.0
+        q["spread_bp"] = (q["ask"] - q["bid"]) / mid * 10000.0 if mid else None
+    else:
+        q["spread_bp"] = None
+    bq, aq = q.get("bid_qty"), q.get("ask_qty")
+    q["queue_imbalance"] = ((bq - aq) / (bq + aq)
+                            if bq is not None and aq is not None and (bq + aq) else None)
+    out["quote"] = q
+    out["ok"] = True
+    return out
+
+
+def cmd_quote(codes: list[str], with_orderbook: bool = True,
+              indent: int | None = None) -> int:
+    """quote 명령 — stdout 은 JSON 만. 진단은 stderr 로."""
+    codes = [str(c).strip() for c in (codes or []) if str(c).strip()]
+    codes = list(dict.fromkeys(codes))
+    if not codes:
+        print(json.dumps({"ok": False, "schema": QUOTE_SCHEMA,
+                          "reason": "--code 로 종목코드를 주십시오."},
+                         ensure_ascii=False, indent=indent))
+        return 1
+    if len(codes) == 1:
+        payload = quote_payload(codes[0], with_orderbook)
+        print(json.dumps(payload, ensure_ascii=False, indent=indent))
+        return 0 if payload["ok"] else 1
+    quotes = {c: quote_payload(c, with_orderbook) for c in codes}
+    payload = {"ok": any(v["ok"] for v in quotes.values()),
+               "schema": QUOTE_SCHEMA, "quotes": quotes}
+    print(json.dumps(payload, ensure_ascii=False, indent=indent))
+    return 0 if payload["ok"] else 1
+
+
 # ── 통합 계층 (2) — 에이전트 판정 싣기 ─────────────────────────────────
 #
 # PIXEL TRADING FLOOR(../trading-floor)의 에이전트들이 분석·토론해 내린 판정을
@@ -6300,6 +6498,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="DART 공시 이벤트까지 포함 (네트워크·키 필요)")
     ft.add_argument("--indent", type=int, default=None,
                     help="JSON 들여쓰기 (기본: 한 줄)")
+    qt = sub.add_parser(
+        "quote", help="실시간 시세를 JSON 으로 출력 (통합용 · KIS 키 필요)")
+    qt.add_argument("--code", action="append", dest="q_codes", metavar="000660",
+                    help="종목코드. 여러 번 줄 수 있습니다")
+    qt.add_argument("--no-orderbook", action="store_true",
+                    help="호가는 받지 않습니다 (호출 절반)")
+    qt.add_argument("--indent", type=int, default=None)
+
     cd_ = sub.add_parser(
         "candles", help="원장의 일봉을 JSON 으로 출력 (통합용 · 네트워크 불필요)")
     cd_.add_argument("--code", required=True, metavar="000660", help="종목코드 6자리")
@@ -6422,6 +6628,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_facts(codes, args.with_disclosures, args.indent)
     elif args.cmd == "candles":
         return cmd_candles(args.code, args.days, args.raw, args.indent)
+    elif args.cmd == "quote":
+        return cmd_quote(args.q_codes, not args.no_orderbook, args.indent)
     return 0
 
 

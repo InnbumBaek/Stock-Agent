@@ -90,6 +90,22 @@ const KI_SECTIONS = {
   ace: ['liq', 'px', 'fin', 'events'],
 };
 
+// 실시간 호가는 FLOW 만 본다.
+//
+// 실시간 '현재가'는 시세 줄로 전원이 보지만, 호가·잔량·스프레드는 방향이 아니라
+// '지금 이 가격에 실제로 얼마나 나가는가'를 보는 값이다. 유동성·체결을 맡은
+// 역할의 재료이고, 여러 명이 같은 것을 보면 의견이 상관되고 전담이 사라진다.
+const KI_MICRO_IDS = new Set(['flow']);
+
+function kiMicroLines(market, agentId) {
+  if (!KI_MICRO_IDS.has(agentId) || !market || !market.kiQuote) return [];
+  try {
+    return kiBridge.formatKiMicroLines(market.kiQuote);
+  } catch (_) {
+    return []; // 서식이 깨져도 프롬프트 생성을 막지 않는다
+  }
+}
+
 function kiLines(market, agentId) {
   if (!market || !market.ki || !market.krCode) return [];
   let cfg;
@@ -107,7 +123,7 @@ function kiLines(market, agentId) {
       staleWarnDays: cfg.staleWarnDays,
       detail: KI_DETAIL[agentId] || 'standard',
       sections: KI_SECTIONS[agentId],
-    });
+    }).concat(kiMicroLines(market, agentId));
   } catch (_) {
     return []; // 서식이 깨져도 프롬프트 생성을 막지 않는다
   }

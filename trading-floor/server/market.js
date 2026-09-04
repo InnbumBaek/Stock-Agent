@@ -1121,6 +1121,7 @@ async function fetchMarket(resolved) {
   let board = null; // multi-venue price board (KR stocks only)
   let perp = null; // USDT perpetual view used by the scalp desk
   let krCode = null; // KRX 6자리 코드 (KR stocks only)
+  let kiQuote = null; // KIS 실시간 시세 (ki.realtime 을 켰을 때만)
   let nameKo = resolved.nameKo || null; // 한국어 종목명 — 원장에서 보강될 수 있다
   let ki = null; // 주가 모니터링 원장의 실측값 (ki.enabled 일 때만)
 
@@ -1206,7 +1207,7 @@ async function fetchMarket(resolved) {
     sentiment.lines = ['주식은 공포·탐욕 지수 미적용 — 뉴스 헤드라인으로 심리 판단'];
 
     const perpSym = ((KR_STOCKS[symbol] || {}).perps || {}).binance || null;
-    const [newsR, intraR, boardR, k15R, k1dR, kiR] = await Promise.allSettled([
+    const [newsR, intraR, boardR, k15R, k1dR, kiR, kqR] = await Promise.allSettled([
       fetchNews(newsQuery(resolved)),
       fetchYahooIntraday(resolved.yahoo),
       yq && resolved.tapbitPair
@@ -1216,11 +1217,14 @@ async function fetchMarket(resolved) {
       perpSym ? fetchPerpKlines(perpSym, '1d', 120) : Promise.reject(new Error('미상장')),
       // 원장 조회는 네트워크가 아니라 로컬 파이썬 스폰이다. 꺼져 있으면 즉시 null.
       kiBridge.fetchKiFacts(krCode).catch(() => null),
+      // 실시간 시세(KIS). ki.realtime 이 꺼져 있으면 즉시 null 이라 비용이 없다.
+      kiBridge.fetchKiQuote(krCode).catch(() => null),
     ]);
     if (newsR.status === 'fulfilled') news.headlines = newsR.value;
     if (intraR.status === 'fulfilled') intraday = buildIntraday(intraR.value, '₩');
     if (boardR.status === 'fulfilled') board = boardR.value;
     if (kiR.status === 'fulfilled' && kiR.value) ki = kiR.value;
+    if (kqR.status === 'fulfilled' && kqR.value) kiQuote = kqR.value;
 
     // KR_STOCKS 밖 종목은 USDT 무기한 계약이 없다. 없다는 사실을 적어 두지 않으면
     // 20배 레벨을 정규장 차트로 설계하게 되고, 그 순간 판정이 통째로 틀어진다.
@@ -1233,6 +1237,16 @@ async function fetchMarket(resolved) {
       // 종목명은 원장이 알고 있다 (KR_STOCKS 에 없으므로 코드만 들고 왔다).
       const s = ki && ki.stocks ? ki.stocks[krCode] : null;
       if (!nameKo && s && s.name) nameKo = s.name;
+    }
+
+    // 실시간을 받았으면 시세 줄을 그것으로 바꾼다.
+    //
+    // 이 줄은 16명 전원이 현재가로 읽는다. 원장 종가는 며칠 묵을 수 있고, 그
+    // 값으로 목표가·괴리·손익비를 논하면 판정이 통째로 틀어진다. 실시간이
+    // 없으면(장 마감·키 없음·조회 실패) 종전대로 원장 종가 줄을 그대로 쓴다.
+    {
+      const rt = kiBridge.formatKiQuoteLine(kiQuote, nameKo || krCode);
+      if (rt) priceLine = rt;
     }
 
     // The tapbit contract is a 24/7 USDT perpetual, so the scalp desk reads
@@ -1315,6 +1329,7 @@ async function fetchMarket(resolved) {
     ...(perp ? { perp } : {}),
     ...(krCode ? { krCode } : {}),
     ...(ki ? { ki } : {}),
+    ...(kiQuote ? { kiQuote } : {}),
   };
 }
 

@@ -182,6 +182,9 @@ module.exports = { DEFAULT_KI, DEFAULT_SCRIPT, isEnabled, kiConfig, krCodeOf,
 | `krCodeOf(x)` | `=> '000660'\|null` | `'000660'` · `'000660.KS'` → 코드 |
 | `fetchKiFacts(code, {cfg}?)` | `=> Promise<facts\|null>` | 파이썬 스폰 → JSON. **절대 reject 하지 않는다** |
 | `fetchKiCandles(code, {cfg}?)` | `=> Promise<candles\|null>` | 원장 일봉 (ki.candles/1). 캐시는 facts 와 분리 |
+| `fetchKiQuote(code, {cfg}?)` | `=> Promise<quote\|null>` | 실시간 시세 (ki.quote/1). **`ki.realtime` 이 꺼져 있으면 스폰조차 하지 않는다.** 캐시는 초 단위 |
+| `formatKiQuoteLine(quote, label)` | `=> string\|null` | 실시간 시세 줄. 못 만들면 null → 원장 종가 줄이 남는다 |
+| `formatKiMicroLines(quote)` | `=> string[]` | 호가·잔량·스프레드 블록. **FLOW 전용** |
 | `formatKiLines(facts, code, opts?)` | `=> string[]` | 프롬프트용 한국어 줄. 없으면 `[]` |
 | `formatKiPriceLine(candles, label)` | `=> string\|null` | 원장 시세 한 줄. 실시간이 아님을 문장에 박는다 |
 | `clearCache()` / `_setSpawn(fn)` | | 캐시 비우기 / 테스트 주입구 |
@@ -243,6 +246,65 @@ SK하이닉스 ₩1,504,000 (+5.54%) · KRX 정규장 종가 2026-08-12 (23일 �
 블록이 그 사실을 명시한다. 스캘핑·공격 모드는 무기한 차트를 전제로 하므로 이 경로에서는
 레벨의 신뢰도가 떨어진다 — `algo` 모드를 쓰는 편이 맞다.
 
+### 4.3-b 실시간 시세 — `ki_monitor.py quote`
+
+원장은 **일별 종가**다. 며칠 지난 값을 현재가로 읽으면 목표가·괴리·손익비가 통째로
+틀어진다. 그 신선도만 한국투자증권 KIS Open API 로 메운다.
+
+원래 이 자리에는 KB증권이 있었다. 2026-08-13 실측에서 `openapi.kbsec.com` 은 API
+게이트웨이가 아니라 서비스 포탈이고 공개 카탈로그 20개가 전부 계좌개설·주문 계열이라
+**시세 API 가 하나도 없다**는 것이 확인됐다. 반면 원 코드의 `field_map`
+(`stck_prpr`·`bidp1` …)은 처음부터 KIS 스키마였다. 붙일 수 없는 서버를 빼고 맞는
+서버를 꽂은 것이다.
+
+```bash
+python ki_monitor.py quote --code 000660 --indent 2
+python ki_monitor.py quote --code 000660 --no-orderbook   # 호가 생략 (호출 절반)
+```
+
+```jsonc
+{
+  "ok": true, "schema": "ki.quote/1", "code": "000660",
+  "source": "한국투자증권 KIS Open API — 국내주식 현재가 · 호가",
+  "realtime": true,
+  "market_open": true,          // 정규장이 열려 있는가
+  "checks": [],                 // 검산에 걸린 항목 (비어야 정상)
+  "quote": {
+    "price": 186200, "open": 185000, "high": 190000, "low": 180000,
+    "prev_close": 185000, "volume": 1234567, "value": 2.3e11,
+    "bid": 186100, "ask": 186300, "bid_qty": 1200, "ask_qty": 800,
+    "change_pct": 0.6486,       // 기준가 대비
+    "spread_bp": 10.74,         // (ask-bid)/mid
+    "queue_imbalance": 0.2,     // (bid_qty-ask_qty)/합 — 양수면 매수 잔량이 두껍다
+    "ts": "2026-09-04T13:20:00"
+  }
+}
+```
+
+| 규칙 | 왜 |
+|---|---|
+| **원장에 쓰지 않는다** (`CATALOG` 의 `kis.snap.*` 은 `persist=False`) | 원장은 KRX 공식 일봉만 담는 장부다. 장중 값이 섞이면 다음 측정이 오염된다 |
+| **검산에 걸린 값은 내보내지 않는다** | 현재가가 고·저 범위 밖이거나 bid>ask 면 매핑 오류다. **틀린 현재가는 없는 것보다 나쁘다** |
+| 실패는 예외가 아니라 `ok:false` + `reason` | 장 마감·휴장일·키 없음은 정상적인 '없음'이다. 부르는 쪽이 원장 종가로 갈아탄다 |
+| **주문 API 는 화이트리스트에 없다** | KB 와 달리 KIS 는 같은 서버에 주문 API 가 있다. `allowed` 는 시세 두 개뿐이고 그 밖은 `OrderNotAllowed` |
+| 토큰을 **파일에 캐시**한다 (`.kis_token.json`, 0600) | 브리지가 분석 한 번에 파이썬을 여러 번 새로 띄운다. 메모리 캐시만으로는 매번 새 토큰을 받아 발급 제한(EGW00133)에 걸린다 |
+| `verified: False` 로 시작한다 | 실응답을 1회 대조하기 전까지는 매핑을 믿지 않는다. `kis_sanity` 가 매 호출 검산한다 |
+
+**누가 무엇을 보는가 — 여기가 갈린다.**
+
+| 값 | 받는 쪽 | 왜 |
+|---|---|---|
+| **현재가·등락률** (시세 줄) | **16명 전원** | 이 줄을 전원이 현재가로 읽는다. 신선도 문제이지 새 업무가 아니다 |
+| **호가·잔량·스프레드·불균형** | **FLOW 만** | 방향이 아니라 '지금 이 가격에 얼마나 나가는가'다. 유동성·체결 담당의 재료 |
+
+```
+SK하이닉스 ₩186,200 (+0.65%) · 한국투자증권 KIS 장중 실시간 · 기준 2026-09-04 13:20
+  — 원장의 일별 종가가 아니라 실시간 조회값이다
+```
+
+실시간을 못 받으면 이 줄을 만들지 않고 **원장 종가 줄이 그대로 남는다.** 값을 지어내지
+않는다. 1호가만 보는 조회라 호가 블록 끝에 그 한계를 함께 적는다.
+
 ### 4.4 설정 (`config.json` 의 `ki` 블록)
 
 ```jsonc
@@ -255,10 +317,17 @@ SK하이닉스 ₩1,504,000 (+5.54%) · KRX 정규장 종가 2026-08-12 (23일 �
     "staleWarnDays": 5,        // 원장이 이만큼 묵으면 프롬프트에 경고
     "injectInto": ["diana", "guard", "safe", "ace"],
     "candleFallback": true,    // 야후가 막히면 원장 일봉으로 대신한다
-    "candleDays": 200          // 대체 시 가져올 일수
+    "candleDays": 200,         // 대체 시 가져올 일수
+
+    "realtime": false,         // KIS 실시간 시세. **기본 꺼짐** — 켜야 돈다
+    "realtimeOrderbook": true, // 호가까지 받을지 (끄면 KIS 호출이 종목당 2→1회)
+    "quoteCacheSec": 20        // 실시간을 분 단위로 묵히면 실시간이 아니다
   }
 }
 ```
+
+`realtime` 은 `enabled` 와 **별개의 스위치**다. 원장만 켜고 실시간은 끈 상태가 기본이며,
+그 상태의 동작은 실시간 도입 이전과 같다.
 
 `server/config.js` 의 `DEFAULTS.ki` 와 `ki-bridge.js` 의 `DEFAULT_KI` 는 **키가 같아야 한다** —
 한쪽에만 키가 생기면 설정이 조용히 무시된다. 테스트가 검사한다.
@@ -273,7 +342,7 @@ SK하이닉스 ₩1,504,000 (+5.54%) · KRX 정규장 종가 2026-08-12 (23일 �
 
 | 에이전트 | 담당 블록 | 이 역할만의 업무 |
 |---|---|---|
-| **FLOW** (유동성·체결) | `liq` `px` `extras` **`profile`** **`exec`** | 실행 시뮬레이션·매물대 — **밖으로 나가지 않던 값이다.** 방향이 아니라 실행 가능성만 본다 |
+| **FLOW** (유동성·체결) | `liq` `px` `extras` **`profile`** **`exec`** + **실시간 호가** | 실행 시뮬레이션·매물대·1호가 — **밖으로 나가지 않던 값이다.** 방향이 아니라 실행 가능성만 본다 |
 | **FILING** (공시·자본구조) | `cap` `fin` `events` **`capital`** | 미상환 사채·최대주주 지분·리픽싱 — 역시 새로 내보낸 값. 가격이 아니라 주식수와 물량을 본다 |
 | **RED** (가정 반대심문) | **`assumptions`** **`limits`** `regime` | 값이 아니라 **값의 한계**를 심문한다. 판정이 아니라 판정의 토대를 공격한다 |
 | DIANA (기본적) | `fin` `px` `extras` `regime` | 밸류에이션·펀더멘털 (본래 역할) |
@@ -289,8 +358,9 @@ SK하이닉스 ₩1,504,000 (+5.54%) · KRX 정규장 종가 2026-08-12 (23일 �
 ACE 는 `buildPrompt` 에서 조기 반환하므로 공통 푸터를 타지 않는다. 별도 주입 지점이
 있고, 한 프롬프트에 두 번 들어가지 않도록 `kiUsed` 로 막는다.
 
-`roster.test.mjs` 가 이 분업을 강제한다 — 실행 시뮬레이션·매물대가 FLOW 외에 붙거나,
-자본구조가 FILING 외에 붙거나, 가정·한계가 RED 외에 붙으면 테스트가 깨진다.
+`roster.test.mjs` 가 이 분업을 강제한다 — 실행 시뮬레이션·매물대·**실시간 호가**가
+FLOW 외에 붙거나, 자본구조가 FILING 외에 붙거나, 가정·한계가 RED 외에 붙으면 테스트가
+깨진다.
 
 ### 4.6 명단 — 13명 → 16명, 그러나 비용은 조건부
 
@@ -507,8 +577,8 @@ python ki_monitor.py report --market KOSPI --with-agents
 ## 8. 검증
 
 ```bash
-cd stock-monitor  && python ki_monitor.py selftest    # 86개 (기존 64 + 통합 22)
-cd trading-floor  && npm test                          # 130개 (기존 68 + 통합 62)
+cd stock-monitor  && python ki_monitor.py selftest    # 95개 (기존 64 + 통합 31)
+cd trading-floor  && npm test                          # 148개 (기존 68 + 통합 80)
 ```
 
 통합이 지키기로 한 것 중 **테스트가 실제로 강제하는 것**:

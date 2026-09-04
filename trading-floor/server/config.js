@@ -72,6 +72,11 @@ function makeDefaults() {
       // 사내망·폐쇄망에서 분석이 아예 서는 것을 막는다.
       candleFallback: true,
       candleDays: 200,
+      // 실시간 시세 (한국투자증권 KIS). 기본은 꺼져 있다 — 켜면 종목당
+      // 파이썬을 한 번 더 띄우고 KIS 를 호출한다.
+      realtime: false,
+      realtimeOrderbook: true,
+      quoteCacheSec: 20,
     },
   };
 }

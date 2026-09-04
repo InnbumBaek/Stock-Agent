@@ -8,7 +8,9 @@
 //
 // 계약(docs/integration.md):
 //   module.exports = { DEFAULT_KI, DEFAULT_SCRIPT, isEnabled, kiConfig, krCodeOf,
-//                      fetchKiFacts, fetchKiCandles, formatKiLines, formatKiPriceLine,
+//                      fetchKiFacts, fetchKiCandles, fetchKiQuote,
+//                      formatKiLines, formatKiPriceLine,
+//                      formatKiQuoteLine, formatKiMicroLines,
 //                      clearCache, _setSpawn }
 //
 // 원칙 — 두 프로젝트의 규칙을 둘 다 지킨다
@@ -51,6 +53,17 @@ const DEFAULT_KI = {
   // 이미 공식 API 로 받아 둔 값을 쓰는 것이다.
   candleFallback: true,
   candleDays: 200, // 대체 시 가져올 일수
+
+  // 실시간 시세 (한국투자증권 KIS). **기본은 꺼져 있다.**
+  //
+  // 원장은 일별 종가라 며칠 지난 값을 현재가로 읽을 위험이 있다. 그 신선도만
+  // 메우는 용도다. 켜면 종목당 파이썬을 한 번 더 띄우고 KIS 를 호출하므로,
+  // 원장만으로 충분한 런에서는 켜지 않는 것이 맞다.
+  realtime: false,
+  // 호가·잔량까지 받을지. 끄면 KIS 호출이 종목당 2회에서 1회로 준다.
+  realtimeOrderbook: true,
+  // 실시간은 오래 캐시하면 실시간이 아니게 된다. 초 단위로 따로 둔다.
+  quoteCacheSec: 20,
 };
 
 // 저장소 배치상 server/ 의 두 단계 위가 저장소 루트다.
@@ -250,8 +263,32 @@ async function fetchKiCandles(codeOrSymbol, opts = {}) {
   ]);
 }
 
-// facts·candles 가 공유하는 실행부. 종류(kind)별로 캐시를 나눈다.
-async function runKiJson(kind, codeOrSymbol, opts, buildArgs) {
+/**
+ * 실시간 시세 한 종목 (ki.quote/1).
+ *
+ * 원장 조회와 달리 **켜야 돈다**(`ki.realtime`). 장 마감 후·휴장일·키 없음은
+ * 실패가 아니라 정상적인 '없음'이고, 그때는 null 을 돌려준다 — 부르는 쪽이
+ * 원장 종가로 갈아탄다. 여기서 값을 지어내지 않는다.
+ */
+async function fetchKiQuote(codeOrSymbol, opts = {}) {
+  const cfg = loadKiCfg(opts.cfg);
+  if (!cfg.realtime) return null;
+  return runKiJson(
+    'quote',
+    codeOrSymbol,
+    opts,
+    (c, code) => [
+      'quote',
+      '--code',
+      code,
+      ...(c.realtimeOrderbook === false ? ['--no-orderbook'] : []),
+    ],
+    Math.max(1, Number(cfg.quoteCacheSec || 20)) * 1000
+  );
+}
+
+// facts·candles·quote 가 공유하는 실행부. 종류(kind)별로 캐시를 나눈다.
+async function runKiJson(kind, codeOrSymbol, opts, buildArgs, ttlMsOverride) {
   const cfg = loadKiCfg(opts.cfg);
   if (!cfg.enabled) return null;
 
@@ -306,7 +343,10 @@ async function runKiJson(kind, codeOrSymbol, opts, buildArgs) {
       return null;
     }
 
-    const ttl = Math.max(60, Number(cfg.cacheMin || 30) * 60) * 1000;
+    // 실시간은 분 단위로 묵히면 실시간이 아니게 되므로 호출부가 TTL 을 준다.
+    const ttl = Number.isFinite(ttlMsOverride)
+      ? ttlMsOverride
+      : Math.max(60, Number(cfg.cacheMin || 30) * 60) * 1000;
     cacheSet(cacheKey, parsed, ttl);
     return parsed;
   }
@@ -625,6 +665,82 @@ function formatKiPriceLine(candlesPayload, label) {
   );
 }
 
+/**
+ * 실시간 시세 줄. 원장 종가 줄을 대신한다.
+ *
+ * 16명 전원이 이 한 줄을 현재가로 읽는다. 그래서 언제 잰 값인지를 반드시
+ * 같이 적는다 — 장 마감 후의 값을 장중 값으로 읽으면 판정이 통째로 틀어진다.
+ *
+ * @param {object|null} quotePayload  fetchKiQuote 의 반환값
+ * @param {string} label              종목명 (없으면 코드)
+ * @returns {string|null}             못 만들면 null (부르는 쪽이 원장으로 폴백)
+ */
+function formatKiQuoteLine(quotePayload, label) {
+  const p = quotePayload;
+  if (!p || p.ok !== true || !p.quote) return null;
+  const q = p.quote;
+  if (!Number.isFinite(Number(q.price))) return null;
+
+  const name = label || p.code;
+  const price = Math.round(Number(q.price)).toLocaleString('en-US');
+  const pct = Number(q.change_pct);
+  const chg = Number.isFinite(pct) ? ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)` : '';
+  const when = String(q.ts || '').replace('T', ' ').slice(0, 16);
+  const state = p.market_open
+    ? '장중 실시간'
+    : '장 마감 후 — 정규장이 열려 있지 않아 더 움직이지 않는다';
+  return (
+    `${name} ₩${price}${chg} · 한국투자증권 KIS ${state}` +
+    (when ? ` · 기준 ${when}` : '') +
+    ' — 원장의 일별 종가가 아니라 실시간 조회값이다'
+  );
+}
+
+/**
+ * 미시구조 블록 — 호가·잔량·스프레드. **FLOW 전담 재료다.**
+ *
+ * 방향(매수·매도)이 아니라 '지금 이 가격에 실제로 얼마나 나갈 수 있는가'를
+ * 보는 값이라, 유동성·체결을 맡은 역할에게만 준다. 여러 명이 같은 재료를
+ * 보면 의견이 상관되고 전담이 사라진다.
+ */
+function formatKiMicroLines(quotePayload) {
+  const p = quotePayload;
+  if (!p || p.ok !== true || !p.quote) return [];
+  const q = p.quote;
+  // Number(null) 은 0 이다. 그대로 두면 '호가 없음'이 '0원'으로 둔갑한다.
+  const num = (v) =>
+    v === null || v === undefined || v === '' || !Number.isFinite(Number(v))
+      ? null
+      : Number(v);
+  const bid = num(q.bid);
+  const ask = num(q.ask);
+  if (bid == null && ask == null) return [];
+
+  const won = (v) => `${Math.round(v).toLocaleString('en-US')}원`;
+  const qty = (v) => `${Math.round(v).toLocaleString('en-US')}주`;
+  const out = ['[실시간 호가 — 한국투자증권 KIS · 1호가 기준]'];
+  if (bid != null && ask != null) {
+    out.push(`  매수 ${won(bid)} / 매도 ${won(ask)}`);
+  }
+  const bq = num(q.bid_qty);
+  const aq = num(q.ask_qty);
+  if (bq != null && aq != null) out.push(`  잔량 매수 ${qty(bq)} / 매도 ${qty(aq)}`);
+  const sp = num(q.spread_bp);
+  if (sp != null) out.push(`  스프레드 ${sp.toFixed(1)}bp`);
+  const qi = num(q.queue_imbalance);
+  if (qi != null) {
+    out.push(
+      `  호가 불균형 ${qi >= 0 ? '+' : ''}${(qi * 100).toFixed(1)}%` +
+        ' (양수면 매수 잔량이 두껍다)'
+    );
+  }
+  out.push('  1호가만 본 값이다. 그 뒤의 두께는 이 조회로 알 수 없다.');
+  if (!p.market_open) {
+    out.push('  장이 닫혀 있어 마지막 호가다 — 지금 이 가격에 체결된다는 뜻이 아니다.');
+  }
+  return out;
+}
+
 // 테스트 주입구 — 실제 파이썬 없이 스폰 동작을 검증하기 위한 것.
 function _setSpawn(fn) {
   spawnImpl = typeof fn === 'function' ? fn : spawn;
@@ -638,7 +754,10 @@ module.exports = {
   krCodeOf,
   fetchKiFacts,
   fetchKiCandles,
+  fetchKiQuote,
   formatKiLines,
+  formatKiQuoteLine,
+  formatKiMicroLines,
   formatKiPriceLine,
   clearCache,
   _setSpawn,

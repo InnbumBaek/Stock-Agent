@@ -46,10 +46,10 @@ pip install pandas numpy scipy requests lxml
 
 ```bash
 cd stock-monitor
-python ki_monitor.py selftest        # 86개 통과해야 정상
+python ki_monitor.py selftest        # 95개 통과해야 정상
 
 cd ../trading-floor
-npm test                             # 130개 통과해야 정상
+npm test                             # 148개 통과해야 정상
 ```
 
 둘 다 통과하면 코드는 정상입니다. 여기서 실패하면 아래로 진행하지 마십시오.
@@ -68,8 +68,13 @@ cp .env.example .env
 ```
 KRX_API_KEY=...      # 한국거래소 — 서비스별 URL 사용신청도 별도로 필요합니다
 DART_API_KEY=...     # 금융감독원
+KIS_APP_KEY=...      # 한국투자증권 — 실시간 시세 (선택)
+KIS_APP_SECRET=...   # 〃
 FRED_API_KEY=...     # 선택 (해외 매크로)
 ```
+
+> KIS 는 **없어도 됩니다.** 넣으면 리포트·프롬프트의 현재가가 원장의 일별 종가 대신
+> 실시간이 됩니다. 안 넣으면 종전대로 원장 종가를 씁니다.
 
 > **KRX 는 키 발급과 사용신청이 따로입니다.** 인증키를 받은 뒤 일별시세·지수·국고채·
 > 선물 각 서비스에 **URL 사용신청**을 눌러야 합니다. 신청하지 않은 서비스는 키가
@@ -167,6 +172,15 @@ cd ../trading-floor
 }
 ```
 
+KIS 키를 넣으셨다면 실시간까지 켭니다. **`enabled` 와 별개의 스위치**입니다.
+
+```json
+{
+  "ki": { "enabled": true, "realtime": true },
+  "watchlist": ["000660", "035720"]
+}
+```
+
 ```bash
 node server/export-brief.js --run --demo --symbols 000660 --mode algo
 ```
@@ -258,6 +272,9 @@ python ki_monitor.py facts --code 000660 --with-disclosures --indent 2
 | `Yahoo chart HTTP 403` 인데 계속 진행됨 | 정상입니다. 원장의 KRX 공식 일봉으로 대체된 것이고 시세 줄에 그 사실이 표시됩니다 |
 | FLOW 가 "실행 시뮬레이션 산출 실패" | 관측기간이 짧습니다(85영업일 이상 필요). `ingest --from` 을 앞당기십시오 |
 | 리포트에 종목이 코드로 표시 | 원장에 그 종목 시세가 없습니다. `ingest --universe` 로 해당 시장을 적재하십시오 |
+| 시세 줄이 여전히 "KRX 정규장 종가" | `ki.realtime` 이 꺼져 있거나 KIS 키가 없습니다. `python ki_monitor.py quote --code 000660 --indent 2` 로 원인을 보십시오 |
+| `quote` 가 `EGW00133` | KIS 토큰 재발급 제한입니다. `.kis_token.json` 이 만들어졌는지 보고, 지웠다면 잠시 뒤 다시 하십시오 |
+| 장 마감 후 실시간이 안 나옴 | 정상입니다. 정규장 밖에는 실시간이 없어 원장 종가로 돌아갑니다 |
 
 ---
 
