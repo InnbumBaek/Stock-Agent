@@ -1120,23 +1120,61 @@ async function fetchMarket(resolved) {
     // Korean stock: reuse the Yahoo chart path with the KRX yahoo symbol and
     // KRW-flavoured labels; add the tapbit perpetual-futures fundamentals line.
     krCode = String(resolved.yahoo || '').replace(/\.KS$/i, '');
-    const yq = await fetchYahooChart(resolved.yahoo, {
-      displayLabel: resolved.nameKo,
-      currencySymbol: '₩',
-      exchangeLabel: 'KRX',
-      currencyWord: '',
-      tapbitLine: `탭비트 무기한 선물: ${resolved.tapbitPair} (USDT 결제, 기초자산 KRX ${krCode})`,
-    });
-    candles = yq.candles;
-    priceLine = yq.priceLine;
-    fundamentals.lines = yq.fundamentals.length ? yq.fundamentals : ['데이터 없음'];
+    const tapbitLine = `탭비트 무기한 선물: ${resolved.tapbitPair} (USDT 결제, 기초자산 KRX ${krCode})`;
+
+    // 캔들 실패는 이 프로젝트에서 유일한 치명적 실패다. 사내망·폐쇄망처럼 야후가
+    // 막힌 곳에서는 분석 자체가 서므로, 그럴 때만 원장(ki.sqlite)의 KRX 공식
+    // 일봉으로 대신한다. 지어내는 것이 아니라 이미 공식 API 로 받아 둔 값이다.
+    let yq = null;
+    let yahooErr = null;
+    try {
+      yq = await fetchYahooChart(resolved.yahoo, {
+        displayLabel: resolved.nameKo,
+        currencySymbol: '₩',
+        exchangeLabel: 'KRX',
+        currencyWord: '',
+        tapbitLine,
+      });
+    } catch (err) {
+      yahooErr = err;
+    }
+
+    if (yq) {
+      candles = yq.candles;
+      priceLine = yq.priceLine;
+      fundamentals.lines = yq.fundamentals.length ? yq.fundamentals : ['데이터 없음'];
+    } else {
+      const kiCfg = kiBridge.kiConfig();
+      const kc = kiCfg.candleFallback
+        ? await kiBridge.fetchKiCandles(krCode).catch(() => null)
+        : null;
+      if (!kc || !Array.isArray(kc.candles) || kc.candles.length === 0) {
+        // 대체도 안 되면 원래 오류를 그대로 올린다 — 없는 값을 만들지 않는다.
+        throw yahooErr || new Error('KR 캔들 소스 없음');
+      }
+      candles = kc.candles;
+      priceLine =
+        kiBridge.formatKiPriceLine(kc, resolved.nameKo) || '데이터 없음';
+      fundamentals.lines = [
+        `출처: ${kc.source}${kc.adjusted ? ' · 수정주가' : ' · 원주가'}`,
+        `기간 ${kc.first} ~ ${kc.as_of} (${kc.n}영업일)` +
+          (kc.stale_days != null ? ` · 기준일로부터 ${kc.stale_days}일 경과` : ''),
+        '공개 시세 API 를 쓰지 못해 원장의 일별 시세로 대신했다. ' +
+          '실시간 호가·시가총액·인트라데이는 이 경로에 없다.',
+        tapbitLine,
+      ];
+      console.error(
+        `[market] ${resolved.display} 야후 시세 실패 — 원장 일봉으로 대체합니다` +
+          ` (${yahooErr && yahooErr.message})`
+      );
+    }
     sentiment.lines = ['주식은 공포·탐욕 지수 미적용 — 뉴스 헤드라인으로 심리 판단'];
 
     const perpSym = ((KR_STOCKS[symbol] || {}).perps || {}).binance || null;
     const [newsR, intraR, boardR, k15R, k1dR, kiR] = await Promise.allSettled([
       fetchNews(newsQuery(resolved)),
       fetchYahooIntraday(resolved.yahoo),
-      fetchPriceBoard(resolved, yq.quote),
+      yq ? fetchPriceBoard(resolved, yq.quote) : Promise.reject(new Error('시세 없음')),
       perpSym ? fetchPerpKlines(perpSym, '15m', 200) : Promise.reject(new Error('미상장')),
       perpSym ? fetchPerpKlines(perpSym, '1d', 120) : Promise.reject(new Error('미상장')),
       // 원장 조회는 네트워크가 아니라 로컬 파이썬 스폰이다. 꺼져 있으면 즉시 null.

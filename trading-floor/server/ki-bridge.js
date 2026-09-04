@@ -8,7 +8,8 @@
 //
 // 계약(docs/integration.md):
 //   module.exports = { DEFAULT_KI, DEFAULT_SCRIPT, isEnabled, kiConfig, krCodeOf,
-//                      fetchKiFacts, formatKiLines, clearCache, _setSpawn }
+//                      fetchKiFacts, fetchKiCandles, formatKiLines, formatKiPriceLine,
+//                      clearCache, _setSpawn }
 //
 // 원칙 — 두 프로젝트의 규칙을 둘 다 지킨다
 //
@@ -45,6 +46,11 @@ const DEFAULT_KI = {
   withDisclosures: false, // 켜면 DART 공시까지 — 네트워크·키가 필요하다
   staleWarnDays: 5, // 원장이 이만큼 묵으면 프롬프트에 경고를 붙인다
   injectInto: ['diana', 'guard', 'safe'], // 실측을 받을 에이전트
+  // 공개 API(야후)로 캔들을 못 받을 때 원장의 KRX 공식 일봉으로 대신할지.
+  // 사내망·폐쇄망에서 분석이 아예 서는 것을 막는다. 지어내는 것이 아니라
+  // 이미 공식 API 로 받아 둔 값을 쓰는 것이다.
+  candleFallback: true,
+  candleDays: 200, // 대체 시 가져올 일수
 };
 
 // 저장소 배치상 server/ 의 두 단계 위가 저장소 루트다.
@@ -112,7 +118,7 @@ function krCodeOf(input) {
 // 파이썬을 그만큼 스폰한다. 실패도 캐시한다 — 원장이 없는 환경에서 매 요청마다
 // 프로세스를 띄우면 그게 더 큰 비용이다.
 
-const cache = new Map(); // code -> { at, ttl, value }
+const cache = new Map(); // '<종류>:<코드>' -> { at, ttl, value }
 const NEG_TTL_MS = 60000; // 실패는 1분만 기억한다
 
 function cacheGet(code) {
@@ -219,24 +225,51 @@ function parseFactsJson(text) {
  *          **절대 reject 하지 않는다.**
  */
 async function fetchKiFacts(codeOrSymbol, opts = {}) {
+  return runKiJson('facts', codeOrSymbol, opts, (cfg, code) => {
+    const a = ['facts', '--code', code];
+    if (cfg.withDisclosures) a.push('--with-disclosures');
+    return a;
+  });
+}
+
+/**
+ * 원장의 KRX 공식 일봉을 읽어 온다 (ki.candles/1).
+ *
+ * 공개 API 가 막힌 곳에서 데스크가 캔들을 못 받아 분석이 서는 것을 막는 용도다.
+ * 없는 값을 만들지 않는다 — 원장에 없으면 null 이다.
+ *
+ * @returns {Promise<object|null>} **절대 reject 하지 않는다.**
+ */
+async function fetchKiCandles(codeOrSymbol, opts = {}) {
+  return runKiJson('candles', codeOrSymbol, opts, (cfg, code) => [
+    'candles',
+    '--code',
+    code,
+    '--days',
+    String(Math.max(30, Number(cfg.candleDays || 200))),
+  ]);
+}
+
+// facts·candles 가 공유하는 실행부. 종류(kind)별로 캐시를 나눈다.
+async function runKiJson(kind, codeOrSymbol, opts, buildArgs) {
   const cfg = loadKiCfg(opts.cfg);
   if (!cfg.enabled) return null;
 
   const code = krCodeOf(codeOrSymbol);
   if (!code) return null;
 
-  const cached = cacheGet(code);
+  const cacheKey = `${kind}:${code}`;
+  const cached = cacheGet(cacheKey);
   if (cached !== undefined) return cached;
 
   const script = scriptPath(cfg);
   if (!fs.existsSync(script)) {
-    console.error(`[ki] 원장 스크립트를 찾지 못했습니다: ${script} — 실측을 건너뜁니다`);
-    cacheSet(code, null, NEG_TTL_MS);
+    console.error(`[ki] 원장 스크립트를 찾지 못했습니다: ${script} — ${kind} 를 건너뜁니다`);
+    cacheSet(cacheKey, null, NEG_TTL_MS);
     return null;
   }
 
-  const args = [script, 'facts', '--code', code];
-  if (cfg.withDisclosures) args.push('--with-disclosures');
+  const args = [script, ...buildArgs(cfg, code)];
   const timeoutMs = Math.max(1000, Number(cfg.timeoutSec || 30) * 1000);
   const cwd = path.dirname(script);
 
@@ -268,18 +301,18 @@ async function fetchKiFacts(codeOrSymbol, opts = {}) {
       break;
     }
     if (parsed.ok !== true) {
-      console.error(`[ki] ${code} 실측 없음 — ${parsed.reason || '원장에 데이터 없음'}`);
-      cacheSet(code, null, NEG_TTL_MS);
+      console.error(`[ki] ${code} ${kind} 없음 — ${parsed.reason || '원장에 데이터 없음'}`);
+      cacheSet(cacheKey, null, NEG_TTL_MS);
       return null;
     }
 
     const ttl = Math.max(60, Number(cfg.cacheMin || 30) * 60) * 1000;
-    cacheSet(code, parsed, ttl);
+    cacheSet(cacheKey, parsed, ttl);
     return parsed;
   }
 
-  console.error(`[ki] ${code} 실측 조회 실패 — ${lastNote || '알 수 없는 이유'}`);
-  cacheSet(code, null, NEG_TTL_MS);
+  console.error(`[ki] ${code} ${kind} 조회 실패 — ${lastNote || '알 수 없는 이유'}`);
+  cacheSet(cacheKey, null, NEG_TTL_MS);
   return null;
 }
 
@@ -393,6 +426,36 @@ function formatKiLines(facts, codeOrSymbol, opts = {}) {
   return out;
 }
 
+/**
+ * 원장 일봉으로 만든 시세 한 줄. **실시간이 아님을 반드시 밝힌다.**
+ *
+ * 원장은 일별 종가다. 이 줄을 현재가처럼 읽으면 판정이 통째로 틀어지므로
+ * 출처와 기준일을 문장 안에 넣는다.
+ *
+ * @returns {string|null} 만들 수 없으면 null
+ */
+function formatKiPriceLine(candlesPayload, label) {
+  const p = candlesPayload;
+  if (!p || p.ok !== true || !Array.isArray(p.candles) || p.candles.length === 0) return null;
+  const last = p.candles[p.candles.length - 1];
+  const prev = p.candles.length >= 2 ? p.candles[p.candles.length - 2] : null;
+  if (!last || !Number.isFinite(last.c)) return null;
+
+  const name = label || p.name || p.code;
+  const price = Math.round(last.c).toLocaleString('en-US');
+  let chg = '';
+  if (prev && Number.isFinite(prev.c) && prev.c !== 0) {
+    const pctChg = ((last.c - prev.c) / prev.c) * 100;
+    chg = ` (${pctChg >= 0 ? '+' : ''}${pctChg.toFixed(2)}%)`;
+  }
+  const stale = Number.isFinite(Number(p.stale_days)) ? Number(p.stale_days) : null;
+  return (
+    `${name} ₩${price}${chg} · KRX 정규장 종가 ${p.as_of || '?'}` +
+    (stale != null ? ` (${stale}일 경과)` : '') +
+    ' — 한국거래소 공식 API 로 받은 일별 시세이며 실시간 호가가 아니다'
+  );
+}
+
 // 테스트 주입구 — 실제 파이썬 없이 스폰 동작을 검증하기 위한 것.
 function _setSpawn(fn) {
   spawnImpl = typeof fn === 'function' ? fn : spawn;
@@ -405,7 +468,9 @@ module.exports = {
   kiConfig,
   krCodeOf,
   fetchKiFacts,
+  fetchKiCandles,
   formatKiLines,
+  formatKiPriceLine,
   clearCache,
   _setSpawn,
 };

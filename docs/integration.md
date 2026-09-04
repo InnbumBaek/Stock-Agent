@@ -171,7 +171,8 @@ python ki_monitor.py facts --code 000660 --with-disclosures   # DART 공시까�
 
 ```js
 module.exports = { DEFAULT_KI, DEFAULT_SCRIPT, isEnabled, kiConfig, krCodeOf,
-                   fetchKiFacts, formatKiLines, clearCache, _setSpawn }
+                   fetchKiFacts, fetchKiCandles, formatKiLines, formatKiPriceLine,
+                   clearCache, _setSpawn }
 ```
 
 | 함수 | 시그니처 | 설명 |
@@ -180,7 +181,9 @@ module.exports = { DEFAULT_KI, DEFAULT_SCRIPT, isEnabled, kiConfig, krCodeOf,
 | `kiConfig(cfg?)` | `=> object` | DEFAULTS 와 병합된 `ki` 설정 사본 |
 | `krCodeOf(x)` | `=> '000660'\|null` | `'000660'` · `'000660.KS'` → 코드 |
 | `fetchKiFacts(code, {cfg}?)` | `=> Promise<facts\|null>` | 파이썬 스폰 → JSON. **절대 reject 하지 않는다** |
+| `fetchKiCandles(code, {cfg}?)` | `=> Promise<candles\|null>` | 원장 일봉 (ki.candles/1). 캐시는 facts 와 분리 |
 | `formatKiLines(facts, code, opts?)` | `=> string[]` | 프롬프트용 한국어 줄. 없으면 `[]` |
+| `formatKiPriceLine(candles, label)` | `=> string\|null` | 원장 시세 한 줄. 실시간이 아님을 문장에 박는다 |
 | `clearCache()` / `_setSpawn(fn)` | | 캐시 비우기 / 테스트 주입구 |
 
 - **외부 npm 의존성 0.** `node:child_process` · `fs` · `path` 만 쓴다.
@@ -189,7 +192,58 @@ module.exports = { DEFAULT_KI, DEFAULT_SCRIPT, isEnabled, kiConfig, krCodeOf,
 - **`python3` → `python` 순서로 찾는다.** `ki.python` 을 지정하면 그것을 먼저.
 - 측정값을 등급·점수로 바꾸지 않는다. `formatKiLines` 의 마지막 줄이 이것을 명시한다.
 
-### 4.3 설정 (`config.json` 의 `ki` 블록)
+### 4.3 막힌 망에서의 캔들 — `ki_monitor.py candles`
+
+데스크는 무료 공개 API(야후·바이낸스)로 캔들을 받는다. 그런데 **캔들 실패는 데스크에서
+유일한 치명적 실패**다 — 사내망·폐쇄망처럼 그 API 가 막힌 곳에서는 분석 자체가 선다.
+
+우리에게는 이미 **한국거래소 공식 API 로 받은 일별 시세**가 원장에 있다. 그것을 쓴다.
+지어내는 것이 아니라 있는 것을 쓰는 것이다.
+
+```bash
+python ki_monitor.py candles --code 000660 --days 200
+python ki_monitor.py candles --code 000660 --raw      # 수정주가 대신 원주가
+```
+
+```jsonc
+{
+  "ok": true, "schema": "ki.candles/1",
+  "code": "000660", "name": "SK하이닉스", "market": "KOSPI",
+  "currency": "KRW",                                    // 원화. 달러 무기한과 섞이면 안 된다
+  "source": "한국거래소 KRX Open API — 일별 시세 (원장)",
+  "interval": "1d", "adjusted": true,
+  "n": 200, "first": "2025-08-13", "as_of": "2026-08-12", "stale_days": 23,
+  "candles": [{ "t": 1786492800000, "o": 1456000.0, "h": 1549000.0,
+                "l": 1440000.0, "c": 1504000.0, "v": 4566672.0 }]
+}
+```
+
+| 규칙 | 왜 |
+|---|---|
+| `t` 는 거래일 **UTC 자정**의 epoch(ms) | 받는 쪽이 `toISOString().slice(0,10)` 을 날짜로 쓴다. 어긋나면 캔들 날짜가 하루씩 밀린다 |
+| OHLC 가 하나라도 빈 봉은 **버린다** (자르기 전에) | 0 으로 채우면 지표가 조용히 틀어진다. 자른 뒤 버리면 요청한 일수보다 적게 나가고 이유를 알 수 없다 |
+| 기본은 **수정주가** (`adj_factor` 적용) | 무상증자·액면분할 구간에서 지표가 통째로 틀어진다 |
+| `currency` 를 명시한다 | 원화 정규장과 USDT 무기한은 절대 섞이면 안 되는 두 가격 축이다 |
+| `as_of`·`stale_days` 를 함께 낸다 | 일별 종가다. 실시간 호가가 아니다 |
+
+**폴백 조건 — 야후가 실패했을 때만.** 순서는 이렇다.
+
+1. 야후 차트를 먼저 시도한다 (평소 경로, 변경 없음)
+2. 실패하고 `ki.enabled` 와 `ki.candleFallback` 이 모두 켜져 있으면 원장 일봉을 쓴다
+3. 그것도 없으면 **원래 오류를 그대로 올린다** — 없는 값을 만들지 않는다
+
+폴백이 켜지면 시세 한 줄에 출처와 기준일이 박힌다.
+
+```
+SK하이닉스 ₩1,504,000 (+5.54%) · KRX 정규장 종가 2026-08-12 (23일 경과)
+  — 한국거래소 공식 API 로 받은 일별 시세이며 실시간 호가가 아니다
+```
+
+이 경로에는 **실시간 호가·시가총액·인트라데이·무기한 선물이 없다.** 기본적 데이터
+블록이 그 사실을 명시한다. 스캘핑·공격 모드는 무기한 차트를 전제로 하므로 이 경로에서는
+레벨의 신뢰도가 떨어진다 — `algo` 모드를 쓰는 편이 맞다.
+
+### 4.4 설정 (`config.json` 의 `ki` 블록)
 
 ```jsonc
 {
@@ -199,7 +253,9 @@ module.exports = { DEFAULT_KI, DEFAULT_SCRIPT, isEnabled, kiConfig, krCodeOf,
     "timeoutSec": 30, "cacheMin": 30,
     "withDisclosures": false,  // 켜면 DART 공시까지 (네트워크·키 필요)
     "staleWarnDays": 5,        // 원장이 이만큼 묵으면 프롬프트에 경고
-    "injectInto": ["diana", "guard", "safe"]
+    "injectInto": ["diana", "guard", "safe"],
+    "candleFallback": true,    // 야후가 막히면 원장 일봉으로 대신한다
+    "candleDays": 200          // 대체 시 가져올 일수
   }
 }
 ```
@@ -343,7 +399,7 @@ python ki_monitor.py daily  --with-agents        # 적재 → 리포트 한 번�
 |---|---|---|
 | `stock-monitor/ki_monitor.py` | +약 700 / −0 | 파일 끝 '11. 통합 계층' 섹션 · 서브커맨드 · 자리표시자 |
 | `trading-floor/server/config.js` | +12 / −0 | `DEFAULTS.ki` 블록 |
-| `trading-floor/server/market.js` | +13 / −3 | `krstock` 경로에 원장 조회 한 줄, 반환에 `krCode`·`ki` |
+| `trading-floor/server/market.js` | +약 55 / −8 | `krstock` 경로에 원장 조회·캔들 폴백, 반환에 `krCode`·`ki` |
 | `trading-floor/server/agents.js` | +40 / −0 | `kiLines()` 헬퍼 + 프롬프트 주입 지점 |
 | `trading-floor/server/server.js` | +68 / −0 | `GET /api/ki` 라우트 |
 | `trading-floor/server/engine.js` | +약 90 / −0 | `_runRecord()` + 사이드카 저장 |
@@ -378,8 +434,8 @@ python ki_monitor.py report --market KOSPI --with-agents
 ## 8. 검증
 
 ```bash
-cd stock-monitor  && python ki_monitor.py selftest    # 80개 (기존 64 + 통합 16)
-cd trading-floor  && npm test                          # 104개 (기존 68 + 통합 36)
+cd stock-monitor  && python ki_monitor.py selftest    # 86개 (기존 64 + 통합 22)
+cd trading-floor  && npm test                          # 110개 (기존 68 + 통합 42)
 ```
 
 통합이 지키기로 한 것 중 **테스트가 실제로 강제하는 것**:
@@ -403,6 +459,12 @@ cd trading-floor  && npm test                          # 104개 (기존 68 + 통
 | 종목별 최신 판정만 모은다 | `export-brief.test.mjs` |
 | 장부·성적표·자기 출력물을 런으로 오해하지 않는다 | `export-brief.test.mjs` |
 | `--run` 없이는 분석을 실행하지 않는다 | `export-brief.test.mjs` |
+| 일봉의 `t` 가 거래일 UTC 자정이다 (날짜가 밀리지 않는다) | `selftest` |
+| OHLC 결측 봉을 자르기 전에 버린다 | `selftest` |
+| 일봉 기본은 수정주가다 | `selftest` |
+| facts 와 candles 가 캐시를 공유하지 않는다 | `ki-bridge.test.mjs` |
+| 원장 시세 줄이 "실시간이 아니다"를 밝힌다 | `ki-bridge.test.mjs` |
+| 캔들이 없으면 시세 줄을 만들지 않는다 | `ki-bridge.test.mjs` |
 
 추가로 **에이전트 절을 끈 리포트가 통합 이전 원본 출력과 바이트 단위로 같은지**를
 회귀 확인에 쓴다 (원본 `ki_monitor.py` 로 같은 원장을 렌더해 비교).
@@ -416,6 +478,8 @@ cd trading-floor  && npm test                          # 104개 (기존 68 + 통
 - **npm 패키지.** 브리지·내보내기 모두 Node 내장만 쓴다.
 - **원장의 자동 갱신.** 브리지는 원장을 읽기만 한다. `ingest` 는 사람이 돌린다 —
   분석 요청이 KRX API 호출을 유발하면 할당량이 조용히 소진된다.
+- **캔들 보간·합성.** 폴백은 원장에 있는 봉만 낸다. 빈 날을 메우거나 분봉을
+  만들어 내지 않는다. 없으면 원래 오류를 올린다.
 - **분석의 자동 실행.** `--run` 없이는 에이전트를 돌리지 않는다.
 - **대외비 데이터의 저장소 반입.** `watchlist.csv`·`exit_plan.csv`·`positions.csv`·
   `ki.sqlite`·`.env`·`config.json` 은 `.gitignore` 에 있다. 저작권이 아니라

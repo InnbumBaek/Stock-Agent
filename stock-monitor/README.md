@@ -70,7 +70,7 @@ python ki_monitor.py daily
 그래서 교차검산·항등식·방향성 테스트를 둡니다.
 
 ```bash
-python ki_monitor.py selftest    # 80개
+python ki_monitor.py selftest    # 86개
 ```
 
 **2. 모른다는 것을 아는 게 낫습니다.**
@@ -132,7 +132,8 @@ pandas numpy scipy requests lxml
 | `report` | 리포트 생성 |
 | `eod` | 종가 기준 알림 평가 |
 | `facts` | 종목별 관측 사실을 JSON 으로 출력 (통합용 · 네트워크 불필요) |
-| `selftest` | 자체 검증 80개 |
+| `candles` | 원장의 일봉을 JSON 으로 출력 (통합용 · 네트워크 불필요) |
+| `selftest` | 자체 검증 86개 |
 | `check-auth` | 키 로딩 확인 (값은 출력하지 않음) |
 
 ---
@@ -165,6 +166,20 @@ python ki_monitor.py facts --codes 000660,005930 --indent 2
 
 `stdout` 은 JSON 만 나갑니다. 진단 메시지는 전부 `stderr` 로 갑니다.
 스키마와 사용처는 [`../docs/integration.md`](../docs/integration.md) 를 보십시오.
+
+### 막힌 망에서의 일봉 — `candles`
+
+데스크는 무료 공개 API(야후)로 캔들을 받는데, 사내망·폐쇄망에서는 그게 막혀
+분석 자체가 섭니다. 그럴 때 **이미 한국거래소 공식 API 로 받아 둔 일별 시세**를
+내보냅니다.
+
+```bash
+python ki_monitor.py candles --code 000660 --days 200
+```
+
+기본은 수정주가입니다(`--raw` 로 원주가). OHLC 가 하나라도 빈 봉은 버립니다 —
+0 으로 채우면 지표가 조용히 틀어집니다. 기준일과 경과일수가 함께 나가므로 받는
+쪽이 이것을 실시간 시세로 오해하지 않습니다.
 
 ---
 

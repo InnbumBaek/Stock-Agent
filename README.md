@@ -81,6 +81,20 @@ python ki_monitor.py report --market KOSPI --with-agents
 어느 단계가 실패해도 앞 단계의 산출물은 살아 있습니다. 에이전트 분석이 없으면 리포트는
 "에이전트 분석이 없습니다"라고 적고 나머지 절을 그대로 냅니다.
 
+### 사내망·폐쇄망이라면
+
+데스크는 무료 공개 API(야후·바이낸스)로 캔들을 받는데, 그게 막힌 곳에서는 분석이
+아예 섭니다. `ki.enabled` 를 켜 두면 **원장의 KRX 공식 일봉**으로 대신합니다 —
+지어내는 것이 아니라 이미 받아 둔 값을 쓰는 것이고, 시세 줄에 출처와 기준일이 박힙니다.
+
+```
+SK하이닉스 ₩1,504,000 (+5.54%) · KRX 정규장 종가 2026-08-12 (23일 경과)
+  — 한국거래소 공식 API 로 받은 일별 시세이며 실시간 호가가 아니다
+```
+
+이 경로에는 실시간 호가·무기한 선물·인트라데이가 없으므로 `scalp`·`attack` 모드보다
+`algo` 모드가 맞습니다.
+
 리포트의 §5 는 이렇게 실립니다.
 
 ```
@@ -110,7 +124,7 @@ python ki_monitor.py report --market KOSPI --with-agents
 # 주가 모니터링 — 회수 판단 리포트
 cd stock-monitor
 python ki_monitor.py daily      # 적재 → 리포트 (에이전트 절 없음)
-python ki_monitor.py selftest   # 80개 (키 불필요)
+python ki_monitor.py selftest   # 86개 (키 불필요)
 ```
 
 ```bash
@@ -118,7 +132,7 @@ python ki_monitor.py selftest   # 80개 (키 불필요)
 cd trading-floor
 node server/server.js           # http://localhost:8000
 # 데모 모드(claude CLI 없이): http://localhost:8000/?demo=1
-npm test                        # 104개
+npm test                        # 110개
 ```
 
 `--with-agents` 없이 만든 리포트는 통합 이전 원본 코드의 출력과 **바이트 단위로 같습니다.**

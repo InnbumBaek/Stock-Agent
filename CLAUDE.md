@@ -57,8 +57,10 @@ trading-floor ──▶ ki.sqlite        AI 판정을 원장에 기록          
 - `config.json` 의 `ki.enabled` 가 `false` 면 `trading-floor` 는 통합 이전과 똑같이 동작한다.
 - `--with-agents` 없이 만든 리포트는 통합 이전 원본 코드의 출력과 **바이트 단위로 같다.**
 - `--run` 없이는 에이전트를 절대 돌리지 않는다. 실전 런은 13명 × claude opus 다.
+- 원장 일봉 폴백은 **야후가 실패했을 때만** 켜진다. 그것도 없으면 원래 오류를
+  그대로 올린다 — 없는 값을 만들지 않는다.
 
-이 세 가지가 깨지면 통합이 원본을 침범한 것이다. 회귀 확인은 §검증 참조.
+하나라도 깨지면 통합이 원본을 침범한 것이다. 회귀 확인은 §검증 참조.
 
 ### 5. 에이전트 출력은 신뢰할 수 없는 입력이다
 
@@ -84,8 +86,8 @@ diff 에 잡혀 실제 변경이 묻힌다. 편집 후 `file <파일>` 로 확�
 두 쪽 다 통과해야 통합이 성립한다.
 
 ```bash
-cd stock-monitor && python ki_monitor.py selftest   # 80개 (키·네트워크 불필요)
-cd trading-floor && npm test                         # 104개
+cd stock-monitor && python ki_monitor.py selftest   # 86개 (키·네트워크 불필요)
+cd trading-floor && npm test                         # 110개
 ```
 
 통합 계층을 건드렸다면 **회귀 확인**까지 해라 — 에이전트 절을 끈 리포트가 통합 이전

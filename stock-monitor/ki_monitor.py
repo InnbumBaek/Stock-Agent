@@ -4891,6 +4891,91 @@ def selftest() -> int:
         _assert(not (banned & set(_facts_measures(row))))
     check("facts 는 판단(등급·점수·권고)을 내보내지 않는다", _facts_no_verdict)
 
+    # 통합 계층 (3) — 원장 일봉 내보내기
+    def _candles_ledger():
+        """검증용 인메모리 원장. 3일치 · 마지막 날은 고가가 결측."""
+        con = sqlite3.connect(":memory:")
+        con.executescript(SCHEMA)
+        rows = [
+            # date, code, name, market, open, high, low, close, volume, adj_factor
+            ("20260810", "111111", "검증사", "KOSDAQ", 100.0, 110.0, 95.0, 105.0, 1000.0, 1.0),
+            ("20260811", "111111", "검증사", "KOSDAQ", 105.0, 120.0, 104.0, 118.0, 2000.0, 1.0),
+            ("20260812", "111111", "검증사", "KOSDAQ", 118.0, None, 110.0, 115.0, 1500.0, 1.0),
+        ]
+        con.executemany(
+            "INSERT INTO price_daily (date,code,name,market,open,high,low,close,"
+            "volume,adj_factor) VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+        con.commit()
+        return con
+
+    def _candles_shape():
+        con = _candles_ledger()
+        p = candles_payload(con, "111111")
+        con.close()
+        _assert(p["ok"] is True and p["schema"] == CANDLES_SCHEMA)
+        _assert(p["currency"] == "KRW")          # 원화. 달러 무기한과 섞이면 안 됩니다
+        _assert(p["interval"] == "1d")
+        # OHLC 가 하나라도 비면 그 봉은 버립니다 (0 으로 채우면 지표가 조용히 틀어집니다)
+        _assert(p["n"] == 2 and len(p["candles"]) == 2)
+        c = p["candles"][0]
+        _assert(set(c) == {"t", "o", "h", "l", "c", "v"})
+        _assert(c["o"] == 100.0 and c["h"] == 110.0 and c["l"] == 95.0 and c["c"] == 105.0)
+    check("원장 일봉이 {t,o,h,l,c,v} 로 나가고 결측 봉은 버린다", _candles_shape)
+
+    def _candles_epoch():
+        """t 는 거래일 UTC 자정이어야 합니다 — 받는 쪽이 toISOString 앞 10글자를
+        날짜로 읽으므로, 어긋나면 캔들 날짜가 하루씩 밀립니다."""
+        con = _candles_ledger()
+        p = candles_payload(con, "111111")
+        con.close()
+        t0 = p["candles"][0]["t"]
+        _assert(t0 == int(pd.Timestamp("2026-08-10").value // 1_000_000))
+        _assert(_dt.datetime.fromtimestamp(t0 / 1000, _dt.timezone.utc)
+                .strftime("%Y-%m-%d") == "2026-08-10")
+        # 오래된 것부터 최신 순
+        _assert(p["candles"][0]["t"] < p["candles"][1]["t"])
+    check("일봉의 t 는 거래일 UTC 자정이고 오름차순이다", _candles_epoch)
+
+    def _candles_asof():
+        con = _candles_ledger()
+        p = candles_payload(con, "111111")
+        con.close()
+        # 기준일과 경과일수를 함께 냅니다 — 실시간이 아니라는 사실이 붙어 다녀야 합니다
+        _assert(p["as_of"] == "2026-08-11")   # 결측 봉을 버린 뒤의 마지막 날
+        _assert(isinstance(p["stale_days"], int) and p["stale_days"] >= 0)
+        _assert(p["name"] == "검증사" and p["market"] == "KOSDAQ")
+        _assert("KRX" in p["source"])
+    check("일봉에 기준일·경과일수·출처가 함께 나간다", _candles_asof)
+
+    def _candles_adjust():
+        """수정주가가 기본입니다. 무상증자 구간에서 지표가 통째로 틀어지지 않게."""
+        con = sqlite3.connect(":memory:")
+        con.executescript(SCHEMA)
+        con.execute(
+            "INSERT INTO price_daily (date,code,market,open,high,low,close,volume,adj_factor)"
+            " VALUES ('20260812','222222','KOSDAQ',100.0,100.0,100.0,100.0,10.0,0.5)")
+        con.commit()
+        adj = candles_payload(con, "222222")
+        raw = candles_payload(con, "222222", adjusted=False)
+        con.close()
+        _assert(adj["adjusted"] is True and adj["candles"][0]["c"] == 50.0)
+        _assert(raw["adjusted"] is False and raw["candles"][0]["c"] == 100.0)
+    check("일봉은 수정주가가 기본이고 --raw 로 원주가를 낸다", _candles_adjust)
+
+    def _candles_days():
+        con = _candles_ledger()
+        p = candles_payload(con, "111111", days=1)
+        con.close()
+        _assert(p["n"] == 1)
+    check("--days 로 구간을 자른다", _candles_days)
+
+    def _candles_missing():
+        con = _candles_ledger()
+        p = candles_payload(con, "999999")
+        con.close()
+        _assert(p["ok"] is False and p["candles"] == [] and p.get("reason"))
+    check("원장에 없는 종목은 빈 캔들과 사유를 낸다 (지어내지 않는다)", _candles_missing)
+
     # 통합 계층 (2) — 에이전트 판정을 리포트에 실을 때
     def _brief_fixture():
         return {
@@ -5691,6 +5776,104 @@ def cmd_facts(codes: list[str], with_disclosures: bool = False,
     return 0 if payload.get("ok") else 1
 
 
+# ── 통합 계층 (3) — 원장 일봉 내보내기 ────────────────────────────────
+#
+# 데스크(../trading-floor)는 무료 공개 API(야후·바이낸스)로 캔들을 받습니다.
+# 사내망·폐쇄망처럼 그 API 가 막힌 곳에서는 캔들을 못 받아 분석 자체가 서고,
+# 캔들 실패는 데스크에서 유일한 치명적 실패입니다.
+#
+# 그런데 우리에게는 이미 **한국거래소 공식 API 로 받은 일별 시세**가 원장에
+# 들어 있습니다. 그것을 그대로 내보냅니다. 지어내는 것이 아니라, 있는 것을
+# 쓰는 것입니다.
+#
+# 지키는 것
+#   · 원장에 있는 값만 냅니다. 없는 날은 없는 대로 둡니다(보간하지 않습니다).
+#   · 수정주가를 씁니다(adj_factor 적용). 무상증자·액면분할 구간에서 지표가
+#     통째로 틀어지지 않게 하기 위해서입니다.
+#   · 기준일과 경과일수를 함께 냅니다. 일별 종가이지 실시간 시세가 아닙니다.
+#   · 통화를 명시합니다. 원화입니다. 달러 기준 무기한 선물과 절대 섞이면 안 됩니다.
+
+CANDLES_SCHEMA = "ki.candles/1"
+
+
+def candles_payload(con, code: str, days: int = 200,
+                    adjusted: bool = True) -> dict:
+    """원장의 일봉을 데스크가 아는 모양으로 냅니다.
+
+    캔들 한 개는 {t, o, h, l, c, v} 이고 t 는 거래일 UTC 자정의 epoch(ms)입니다.
+    (받는 쪽이 toISOString() 앞 10글자를 날짜로 쓰므로 UTC 자정이어야 거래일이
+     그대로 찍힙니다.)"""
+    code = str(code).strip().zfill(6)
+    out = {"ok": False, "schema": CANDLES_SCHEMA, "code": code,
+           "candles": [], "currency": "KRW",
+           "source": "한국거래소 KRX Open API — 일별 시세 (원장)",
+           "interval": "1d", "adjusted": bool(adjusted)}
+
+    market = facts_market_of(con, code)
+    if market is None:
+        out["reason"] = "원장에 이 종목의 시세가 없습니다"
+        return out
+    out["market"] = market
+
+    df = price_panel(con, [code], adjusted=adjusted)
+    if df.empty:
+        out["reason"] = "원장에서 시세를 읽지 못했습니다"
+        return out
+
+    df = df.sort_values("date")
+    # OHLC 가 하나라도 비면 그 봉은 버립니다. 0 으로 채우면 지표가 조용히 틀어집니다.
+    # **자르기 전에** 버려야 합니다 — 최근 봉이 불완전하면 요청한 일수보다
+    # 적게 나가고, 받는 쪽은 왜 짧은지 알 수 없습니다.
+    df = df.dropna(subset=["open", "high", "low", "close"])
+    if days and days > 0:
+        df = df.tail(int(days))
+    if df.empty:
+        out["reason"] = "OHLC 가 온전한 봉이 없습니다"
+        return out
+
+    rows = []
+    for _, r in df.iterrows():
+        rows.append({
+            # 거래일 UTC 자정 — 받는 쪽이 날짜로 그대로 읽습니다
+            "t": int(pd.Timestamp(r["date"]).normalize().value // 1_000_000),
+            "o": float(r["open"]), "h": float(r["high"]),
+            "l": float(r["low"]), "c": float(r["close"]),
+            "v": float(r["volume"]) if pd.notna(r["volume"]) else 0.0,
+        })
+
+    last = pd.Timestamp(df["date"].iloc[-1])
+    nm = con.execute(
+        "SELECT name FROM price_daily WHERE code=? AND name IS NOT NULL "
+        "ORDER BY date DESC LIMIT 1", (code,)).fetchone()
+
+    out.update(ok=True, candles=rows, n=len(rows),
+               name=(nm[0] if nm else None),
+               as_of=str(last.date()),
+               stale_days=int((pd.Timestamp(date.today()) - last).days),
+               first=str(pd.Timestamp(df["date"].iloc[0]).date()))
+    return out
+
+
+def cmd_candles(code: str, days: int = 200, raw: bool = False,
+                indent: int | None = None) -> int:
+    """candles 명령 — stdout 은 JSON 만. 진단은 stderr 로."""
+    db = Path(env("db_path"))
+    if not db.exists():
+        print(json.dumps(
+            {"ok": False, "schema": CANDLES_SCHEMA, "code": code, "candles": [],
+             "reason": f"원장이 없습니다: {db.name}. "
+                       f"ingest --universe <시장> 을 먼저 실행하십시오."},
+            ensure_ascii=False, indent=indent))
+        return 1
+    con = connect()
+    try:
+        payload = candles_payload(con, code, days, adjusted=not raw)
+    finally:
+        con.close()
+    print(json.dumps(payload, ensure_ascii=False, indent=indent))
+    return 0 if payload.get("ok") else 1
+
+
 # ── 통합 계층 (2) — 에이전트 판정 싣기 ─────────────────────────────────
 #
 # PIXEL TRADING FLOOR(../trading-floor)의 에이전트들이 분석·토론해 내린 판정을
@@ -5967,6 +6150,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="DART 공시 이벤트까지 포함 (네트워크·키 필요)")
     ft.add_argument("--indent", type=int, default=None,
                     help="JSON 들여쓰기 (기본: 한 줄)")
+    cd_ = sub.add_parser(
+        "candles", help="원장의 일봉을 JSON 으로 출력 (통합용 · 네트워크 불필요)")
+    cd_.add_argument("--code", required=True, metavar="000660", help="종목코드 6자리")
+    cd_.add_argument("--days", type=int, default=200, help="최근 며칠 (기본 200)")
+    cd_.add_argument("--raw", action="store_true",
+                     help="수정주가 대신 원주가 (기본은 수정주가)")
+    cd_.add_argument("--indent", type=int, default=None, help="JSON 들여쓰기")
     return ap
 
 
@@ -6080,6 +6270,8 @@ def main(argv: list[str] | None = None) -> int:
                 ensure_ascii=False, indent=args.indent))
             return 1
         return cmd_facts(codes, args.with_disclosures, args.indent)
+    elif args.cmd == "candles":
+        return cmd_candles(args.code, args.days, args.raw, args.indent)
     return 0
 
 

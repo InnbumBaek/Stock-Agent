@@ -225,6 +225,88 @@ test('제한 시간을 넘기면 자식을 죽이고 null 을 돌려준다', asy
   reset();
 });
 
+// ------------------------------------------------------------ fetchKiCandles
+
+function candlesJson(code = '000660') {
+  return JSON.stringify({
+    ok: true,
+    schema: 'ki.candles/1',
+    code,
+    name: 'SK하이닉스',
+    market: 'KOSPI',
+    currency: 'KRW',
+    source: '한국거래소 KRX Open API — 일별 시세 (원장)',
+    interval: '1d',
+    adjusted: true,
+    n: 2,
+    first: '2026-08-11',
+    as_of: '2026-08-12',
+    stale_days: 23,
+    candles: [
+      { t: 1786406400000, o: 1405000, h: 1455000, l: 1373000, c: 1425000, v: 3817655 },
+      { t: 1786492800000, o: 1456000, h: 1549000, l: 1440000, c: 1504000, v: 4566672 },
+    ],
+  });
+}
+
+test('fetchKiCandles: candles 서브커맨드를 --days 와 함께 부른다', async () => {
+  reset();
+  const spawn = spyingSpawn({ stdout: candlesJson() });
+  ki._setSpawn(spawn);
+  const r = await ki.fetchKiCandles('000660', { cfg: { ...ON, candleDays: 120 } });
+  assert.ok(r && r.ok === true);
+  assert.equal(r.candles.length, 2);
+  const { args } = spawn.calls[0];
+  assert.deepEqual(args.slice(1), ['candles', '--code', '000660', '--days', '120']);
+  reset();
+});
+
+test('fetchKiCandles: 꺼져 있으면 스폰하지 않는다', async () => {
+  reset();
+  const spawn = spyingSpawn({ stdout: candlesJson() });
+  ki._setSpawn(spawn);
+  assert.equal(await ki.fetchKiCandles('000660', { cfg: { enabled: false } }), null);
+  assert.equal(spawn.calls.length, 0);
+  reset();
+});
+
+test('facts 와 candles 는 캐시를 공유하지 않는다', async () => {
+  reset();
+  const spawn = spyingSpawn((bin, args) => ({
+    stdout: args.includes('candles') ? candlesJson() : factsJson(),
+  }));
+  ki._setSpawn(spawn);
+  const f = await ki.fetchKiFacts('000660', { cfg: ON });
+  const c = await ki.fetchKiCandles('000660', { cfg: ON });
+  assert.equal(f.schema, 'ki.facts/1');
+  assert.equal(c.schema, 'ki.candles/1', '캔들 요청이 실측 캐시를 받아오면 안 된다');
+  assert.equal(spawn.calls.length, 2);
+  reset();
+});
+
+// ----------------------------------------------------------- formatKiPriceLine
+
+test('원장 시세 줄은 실시간이 아님을 반드시 밝힌다', () => {
+  const line = ki.formatKiPriceLine(JSON.parse(candlesJson()), 'SK하이닉스');
+  assert.ok(line.includes('SK하이닉스'));
+  assert.ok(line.includes('1,504,000'), '마지막 종가');
+  assert.ok(line.includes('2026-08-12'), '기준일');
+  assert.ok(line.includes('23일 경과'));
+  assert.ok(line.includes('실시간 호가가 아니다'), '일별 종가를 현재가로 읽으면 판정이 틀어진다');
+});
+
+test('원장 시세 줄은 전일 대비 등락을 실제 값으로 계산한다', () => {
+  const line = ki.formatKiPriceLine(JSON.parse(candlesJson()), null);
+  // (1504000 - 1425000) / 1425000 = +5.54%
+  assert.ok(line.includes('+5.54%'), line);
+});
+
+test('캔들이 없으면 시세 줄을 만들지 않는다 (지어내지 않는다)', () => {
+  assert.equal(ki.formatKiPriceLine(null, 'X'), null);
+  assert.equal(ki.formatKiPriceLine({ ok: true, candles: [] }, 'X'), null);
+  assert.equal(ki.formatKiPriceLine({ ok: false, candles: [{ c: 1 }] }, 'X'), null);
+});
+
 // --------------------------------------------------------------- formatKiLines
 
 test('facts 가 없으면 붙일 줄이 없다 (빈 블록을 만들지 않는다)', () => {
