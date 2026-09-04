@@ -1,0 +1,1092 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>성적표 — PIXEL TRADING FLOOR</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/galmuri/dist/galmuri.css">
+  <style>
+  /* ==========================================================================
+     PIXEL TRADING FLOOR — 성적표(stats) 단일 파일 페이지
+     외부 라이브러리 0. 색·그림자·모서리는 기존 style.css 톤을 그대로 따른다.
+     ========================================================================== */
+  *, *::before, *::after { box-sizing: border-box; }
+
+  :root {
+    --bg:      #1a1a24;
+    --panel:   #12121c;
+    --deep:    #08080e;
+    --ink:     #ffffff;
+    --ink-dim: #9a9ab4;
+    --ink-mute:#5a5a72;
+    --shadow:  #0a0a12;
+    --green:   #3fb950;
+    --red:     #f85149;
+    --amber:   #d29922;
+    --gold:    #e8c84a;
+    --blue:    #4a9de8;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Galmuri11', monospace;
+    font-size: 14px;
+    -webkit-font-smoothing: none;
+    image-rendering: pixelated;
+  }
+  canvas { image-rendering: pixelated; }
+  a { color: var(--gold); text-decoration: none; }
+
+  /* CRT 스캔라인 — 플로어 화면과 동일한 질감 */
+  .crt {
+    position: fixed; inset: 0; z-index: 9998; pointer-events: none; opacity: .06;
+    background: repeating-linear-gradient(to bottom, #000 0, #000 2px, transparent 2px, transparent 4px);
+  }
+
+  /* ===== 상단 바 ===== */
+  #topbar {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 10px 16px; background: var(--panel); border-bottom: 3px solid #000;
+  }
+  #back {
+    background: #0a0a10; color: var(--gold); border: 2px solid #000;
+    box-shadow: 3px 3px 0 #000; padding: 6px 10px; font-size: 12px; letter-spacing: 1px;
+  }
+  #back:hover { background: var(--gold); color: #1a1408; }
+  #logo { font-size: 17px; color: var(--gold); text-shadow: 2px 2px 0 #000; letter-spacing: 1px; }
+  #topbar .spacer { flex: 1; }
+  #stamp { font-size: 11px; color: var(--ink-mute); }
+  #reload {
+    background: #0a0a10; color: #b9b9cc; border: 2px solid #000; box-shadow: 3px 3px 0 #000;
+    font-family: inherit; font-size: 12px; padding: 6px 10px; cursor: pointer;
+  }
+  #reload:hover { color: var(--gold); }
+
+  main { max-width: 1160px; margin: 0 auto; padding: 14px 16px 40px; }
+
+  /* ===== 공용 패널 ===== */
+  .panel {
+    background: var(--deep); border: 3px solid #000; box-shadow: 4px 4px 0 var(--shadow);
+    margin-bottom: 16px;
+  }
+  .panel > h2 {
+    margin: 0; padding: 7px 10px; background: #11111c; border-bottom: 2px solid #000;
+    font-size: 12px; letter-spacing: 1px; color: var(--gold); font-weight: normal;
+  }
+  .panel > h2 .sub { color: var(--ink-mute); margin-left: 8px; font-size: 10px; letter-spacing: 0; }
+  .panel-body { padding: 12px 10px; }
+
+  /* ===== 안내/오류 배너 ===== */
+  #notice {
+    padding: 10px 12px; margin-bottom: 14px; border: 3px solid #000;
+    box-shadow: 4px 4px 0 var(--shadow); font-size: 12px; line-height: 1.7;
+    background: #14141f; color: var(--ink-dim);
+  }
+  #notice.err  { background: #2a1114; color: #ffb3ae; border-color: #000; }
+  #notice.warn { background: #241d0a; color: #f0d488; }
+  #notice.hidden { display: none; }
+  #notice b { color: var(--gold); }
+
+  /* ===== 표본 부족 경고 — 이 페이지에서 제일 중요한 경고 ===== */
+  #small-sample {
+    display: none; align-items: flex-start; gap: 12px;
+    padding: 14px 14px; margin-bottom: 16px;
+    background: #2a1114; border: 3px solid var(--red); box-shadow: 4px 4px 0 var(--shadow);
+  }
+  #small-sample.show { display: flex; }
+  #small-sample .ss-mark { font-size: 30px; line-height: 1; color: var(--red); }
+  #small-sample .ss-title { font-size: 17px; color: #ff8a84; letter-spacing: 1px; margin-bottom: 6px; }
+  #small-sample .ss-desc { font-size: 12px; line-height: 1.8; color: #ffc9c5; }
+  #small-sample .ss-desc em { color: #fff; font-style: normal; }
+
+  /* ===== 요약 카드 ===== */
+  #cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .card {
+    position: relative; padding: 10px 11px 12px;
+    background: var(--deep); border: 3px solid #000; box-shadow: 4px 4px 0 var(--shadow);
+  }
+  .card .c-key  { font-size: 11px; color: var(--ink-dim); letter-spacing: 1px; }
+  .card .c-val  { font-size: 25px; color: #f2f2f8; margin-top: 6px; word-break: keep-all; }
+  .card .c-val.na { font-size: 15px; color: var(--ink-mute); }
+  .card .c-sub  { font-size: 10px; color: var(--ink-mute); margin-top: 5px; line-height: 1.6; }
+  .card.gold .c-val { color: var(--gold); }
+  .card.up   .c-val { color: var(--green); }
+  .card.down .c-val { color: var(--red); }
+  .card .c-flag {
+    position: absolute; top: 0; right: 0; background: var(--red); color: #fff;
+    font-size: 9px; padding: 2px 5px; letter-spacing: 1px;
+  }
+
+  /* ===== 표 ===== */
+  .tbl-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; min-width: 560px; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid #15151f; text-align: right; white-space: nowrap; }
+  th {
+    background: #11111c; color: var(--ink-dim); font-weight: normal; font-size: 11px;
+    letter-spacing: 1px; border-bottom: 2px solid #000; position: sticky; top: 0;
+  }
+  th:first-child, td:first-child { text-align: left; }
+  tbody tr:hover { background: #101019; }
+  td.na, .na-text { color: var(--ink-mute); }
+  .up { color: var(--green); }
+  .down { color: var(--red); }
+  .chip {
+    display: inline-block; padding: 1px 5px; font-size: 10px; letter-spacing: 1px;
+    border: 2px solid #000; background: #1c1c28; color: #b9b9cc;
+  }
+  .chip.win  { background: var(--green); color: #08160b; }
+  .chip.loss { background: var(--red);   color: #fff; }
+  .chip.pend { background: #1c1c28; color: var(--ink-mute); }
+  .chip.warnchip { background: var(--red); color: #fff; }
+  .chip.buy  { background: var(--green); color: #08160b; }
+  .chip.sell { background: var(--red);   color: #fff; }
+  .chip.hold { background: #1c1c28; color: #b9b9cc; }
+  .mode-tag { color: var(--gold); }
+
+  /* ===== 캘리브레이션 ===== */
+  #calib-wrap { position: relative; }
+  #calib { display: block; width: 100%; height: 380px; background: var(--deep); border: 2px solid #1c1c28; }
+  #calib-tip {
+    position: absolute; display: none; z-index: 5; pointer-events: none;
+    background: #11111c; border: 2px solid #000; box-shadow: 3px 3px 0 var(--shadow);
+    padding: 6px 8px; font-size: 11px; line-height: 1.6; color: #e6e6f0; white-space: nowrap;
+  }
+  #calib-tip .tt { color: var(--gold); }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 11px; color: var(--ink-dim); }
+  .legend i { display: inline-block; width: 11px; height: 11px; border: 2px solid #000; margin-right: 5px; vertical-align: -2px; }
+  .legend .dash { display: inline-block; width: 22px; border-top: 2px dashed var(--gold); margin-right: 5px; vertical-align: 4px; }
+  .howto {
+    margin-top: 10px; padding: 8px 10px; background: #101019; border-left: 3px solid var(--gold);
+    font-size: 11px; line-height: 1.8; color: var(--ink-dim);
+  }
+  .howto b { color: var(--gold); }
+  #calib-note { margin-top: 8px; font-size: 11px; line-height: 1.7; color: var(--ink-mute); }
+
+  /* ===== 포지션 요약 ===== */
+  #pos-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+  .pos-cell { padding: 8px 9px; background: #101019; border: 2px solid #000; }
+  .pos-cell .p-key { font-size: 10px; color: var(--ink-dim); letter-spacing: 1px; }
+  .pos-cell .p-val { font-size: 17px; margin-top: 4px; color: #f2f2f8; }
+  .pos-cell .p-val.na { font-size: 12px; color: var(--ink-mute); }
+
+  #note-box { font-size: 11px; line-height: 1.8; color: var(--ink-dim); }
+
+  #disclaimer {
+    margin-top: 20px; padding: 12px; text-align: center; font-size: 11px; line-height: 1.8;
+    color: var(--ink-mute); background: var(--panel); border: 3px solid #000; box-shadow: 4px 4px 0 var(--shadow);
+  }
+  #disclaimer b { color: var(--amber); }
+  </style>
+</head>
+<body>
+  <div class="crt" aria-hidden="true"></div>
+
+  <header id="topbar">
+    <a id="back" href="/">← 플로어로</a>
+    <div id="logo">◆ 성적표 · TRACK RECORD ◆</div>
+    <div class="spacer"></div>
+    <span id="stamp">—</span>
+    <button id="reload" type="button">↻ 새로고침</button>
+  </header>
+
+  <main>
+    <div id="notice" class="hidden"></div>
+
+    <!-- 표본 부족 경고 -->
+    <section id="small-sample">
+      <div class="ss-mark">⚠</div>
+      <div>
+        <div class="ss-title" id="ss-title">통계적 유의성 없음</div>
+        <div class="ss-desc" id="ss-desc"></div>
+      </div>
+    </section>
+
+    <!-- 1. 요약 카드 -->
+    <section id="cards"></section>
+
+    <!-- 2. 모드별 비교 -->
+    <section class="panel">
+      <h2>◆ 모드별 비교 <span class="sub">algo / scalp / attack</span></h2>
+      <div class="panel-body">
+        <div class="tbl-wrap">
+          <table id="mode-table">
+            <thead>
+              <tr>
+                <th>모드</th><th>총 판정</th><th>평가 표본</th><th>승률</th><th>평균 수익</th><th>평균 R:R</th>
+              </tr>
+            </thead>
+            <tbody id="mode-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. 캘리브레이션 차트 -->
+    <section class="panel">
+      <h2>◆ 캘리브레이션 <span class="sub">예측 확신도 vs 실제 적중률</span></h2>
+      <div class="panel-body">
+        <div id="calib-wrap">
+          <canvas id="calib"></canvas>
+          <div id="calib-tip"></div>
+        </div>
+        <div class="legend">
+          <span><span class="dash"></span>완벽한 보정선 (예측 = 실제)</span>
+          <span><i style="background:#f85149"></i>과신 — 실제가 예측보다 낮음</span>
+          <span><i style="background:#4a9de8"></i>과소평가 — 실제가 예측보다 높음</span>
+          <span><i style="background:#e8c84a"></i>양호 (오차 3%p 이내)</span>
+          <span><i style="background:#08080e;border-color:#9a9ab4"></i>예측값 없음 → 버킷 중앙값 사용</span>
+        </div>
+        <div class="howto">
+          <b>보는 법</b> — 점이 대각선 <b>아래</b>면 확신도에 비해 덜 맞혔다는 뜻(<b>과신</b>), <b>위</b>면 실제보다 확신도를 낮게 부른 것(과소평가).
+          점 크기는 그 버킷의 표본 수다. 표본이 적은 버킷은 위치가 우연히 흔들리므로 추세로 읽지 마라.
+        </div>
+        <div id="calib-note"></div>
+        <div class="tbl-wrap" style="margin-top:12px">
+          <table id="bucket-table">
+            <thead>
+              <tr><th>확신도 버킷</th><th>표본</th><th>예측</th><th>실제 적중률</th><th>격차</th><th>평균 수익</th></tr>
+            </thead>
+            <tbody id="bucket-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. 가상 포지션 요약 -->
+    <section class="panel">
+      <h2>◆ 가상 포지션 요약 <span class="sub">시뮬레이션 체결 기준</span></h2>
+      <div class="panel-body"><div id="pos-grid"></div></div>
+    </section>
+
+    <!-- 5. 최근 판정 -->
+    <section class="panel">
+      <h2>◆ 최근 판정 <span class="sub">최대 20건</span></h2>
+      <div class="panel-body">
+        <div class="tbl-wrap">
+          <table id="recent-table">
+            <thead>
+              <tr><th>시각</th><th>심볼</th><th>모드</th><th>액션</th><th>확신도</th><th>R:R</th><th>결과</th></tr>
+            </thead>
+            <tbody id="recent-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 서버가 붙인 한계 메모 -->
+    <section class="panel" id="note-panel" style="display:none">
+      <h2>◆ 집계 메모</h2>
+      <div class="panel-body"><div id="note-box"></div></div>
+    </section>
+
+    <footer id="disclaimer">
+      <b>AI 시뮬레이션 결과 기록이며 투자 성과를 보장하지 않습니다.</b><br>
+      실주문이 아닌 가상 판정·가상 포지션 기록이다. 표본이 적을수록 승률·기대값은 우연에 가깝다.
+    </footer>
+  </main>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ------------------------------------------------------------------
+     설정
+     ------------------------------------------------------------------ */
+  var API = '/api/stats';
+  var MIN_SAMPLE = 20;           // 이 미만이면 통계적 유의성 경고
+  var GOOD_GAP   = 3;            // 캘리브레이션 오차 허용치 (%p)
+
+  var lastNorm = null;           // 마지막으로 렌더한 정규화 데이터 (리사이즈 재도색용)
+  var calibPoints = [];          // 캔버스 좌표 → 툴팁 히트 테스트용
+
+  /* ------------------------------------------------------------------
+     작은 도우미
+     ------------------------------------------------------------------ */
+  function $(sel) { return document.querySelector(sel); }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = String(text);
+    return n;
+  }
+
+  // 유한한 숫자만 통과. 그 외에는 전부 null (= "데이터 없음")
+  function num(v) {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string' && v.trim() !== '' && isFinite(Number(v))) return Number(v);
+    return null;
+  }
+
+  // 여러 후보 키 중 먼저 잡히는 값. 서버 필드명이 계약서에 명시되지 않은 항목용
+  function pick(obj, keys) {
+    if (!obj || typeof obj !== 'object') return null;
+    for (var i = 0; i < keys.length; i++) {
+      var v = obj[keys[i]];
+      if (v !== undefined && v !== null && v !== '') return v;
+    }
+    return null;
+  }
+
+  function pickNum(obj, keys) { return num(pick(obj, keys)); }
+
+  // 적중률류 값 정규화. 0~1 비율로 오면 %로 환산한다.
+  // (적중률이 진짜로 1% 이하인 경우는 실질적으로 없으므로 이 판정이 안전하다)
+  function asRate(v) {
+    var n = num(v);
+    if (n === null) return null;
+    if (n >= 0 && n <= 1) return n * 100;
+    return n;
+  }
+
+  function fmtPct(v, d) {
+    if (v === null) return null;
+    return v.toFixed(d === undefined ? 1 : d) + '%';
+  }
+  function fmtSignedPct(v, d) {
+    if (v === null) return null;
+    return (v > 0 ? '+' : '') + v.toFixed(d === undefined ? 2 : d) + '%';
+  }
+  function fmtNum(v, d) {
+    if (v === null) return null;
+    return v.toFixed(d === undefined ? 2 : d);
+  }
+  function fmtInt(v) {
+    if (v === null) return null;
+    return String(Math.round(v));
+  }
+
+  // 값이 없으면 "데이터 없음"으로 칸을 채운다 (임의 대체값 금지)
+  function setCell(td, text) {
+    if (text === null || text === undefined) {
+      td.textContent = '데이터 없음';
+      td.classList.add('na');
+    } else {
+      td.textContent = text;
+    }
+    return td;
+  }
+
+  function fmtTime(raw) {
+    if (!raw) return null;
+    var d = new Date(raw);
+    if (isNaN(d.getTime())) return String(raw);
+    function p(n) { return (n < 10 ? '0' : '') + n; }
+    return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  // '50-59' → 54.5 (예측값이 없을 때 버킷 라벨에서 중앙값을 유도. 유도했다는 표시를 반드시 남긴다)
+  function bucketMid(label) {
+    if (!label) return null;
+    var m = String(label).match(/(-?\d+(?:\.\d+)?)\s*[-~–]\s*(-?\d+(?:\.\d+)?)/);
+    if (m) return (Number(m[1]) + Number(m[2])) / 2;
+    var one = String(label).match(/(-?\d+(?:\.\d+)?)/);
+    return one ? Number(one[1]) : null;
+  }
+
+  /* ------------------------------------------------------------------
+     정규화 — 계약서(stats.js buildStats)의 형식을 기준으로 삼되,
+     명시되지 않은 하위 필드는 후보 키를 훑어서 관대하게 받는다.
+     없으면 만들어내지 않고 null로 둔다.
+     ------------------------------------------------------------------ */
+  function normalize(raw) {
+    var s = (raw && typeof raw === 'object') ? raw : {};
+    var pos = (s.positions && typeof s.positions === 'object') ? s.positions : {};
+
+    var out = {
+      raw: s,
+      total: pickNum(s, ['total', 'totalDecisions', 'count']),
+      byMode: (s.byMode && typeof s.byMode === 'object') ? s.byMode : {},
+      buckets: [],
+      positions: pos,
+      note: pick(s, ['note', 'notes', 'limitation']),
+      generatedAt: pick(s, ['generatedAt', 'ts', 'updatedAt', 'at'])
+    };
+
+    // --- 버킷: calibration 우선, 없으면 byConfidence로 대체 ---
+    var calib = Array.isArray(s.calibration) ? s.calibration : [];
+    var conf  = Array.isArray(s.byConfidence) ? s.byConfidence : [];
+    out.usedFallbackBuckets = (calib.length === 0 && conf.length > 0);
+
+    var confByBucket = {};
+    conf.forEach(function (c) { if (c && c.bucket !== undefined) confByBucket[String(c.bucket)] = c; });
+
+    var src = calib.length ? calib : conf;
+    src.forEach(function (row) {
+      if (!row || typeof row !== 'object') return;
+      var label = row.bucket !== undefined && row.bucket !== null ? String(row.bucket) : null;
+      var mate = label !== null ? (confByBucket[label] || {}) : {};
+
+      var predicted = asRate(pick(row, ['predicted', 'expected', 'confidence', 'avgConfidence']));
+      var derived = false;
+      if (predicted === null) {
+        predicted = bucketMid(label);        // 라벨에서 유도 — 표시로 구분한다
+        derived = predicted !== null;
+      }
+      var actual = asRate(pick(row, ['actual', 'hitRate', 'realized', 'accuracy']));
+      if (actual === null) actual = asRate(pick(mate, ['hitRate', 'actual', 'accuracy']));
+
+      var n = pickNum(row, ['n', 'count', 'samples', 'evaluated']);
+      if (n === null) n = pickNum(mate, ['n', 'count', 'samples', 'evaluated']);
+
+      var gap = num(row.gap);
+      if (gap === null && actual !== null && predicted !== null) gap = actual - predicted;
+
+      var avgRet = pickNum(row, ['avgReturnPct', 'avgReturn', 'avgPct']);
+      if (avgRet === null) avgRet = pickNum(mate, ['avgReturnPct', 'avgReturn', 'avgPct']);
+
+      out.buckets.push({
+        label: label === null ? '이름 없음' : label,
+        n: n, predicted: predicted, actual: actual, gap: gap,
+        avgReturnPct: avgRet, derivedPredicted: derived
+      });
+    });
+
+    // --- 평가 가능 표본 ---
+    // 1) 서버가 직접 준 값 → 2) total - pending → 3) 모드 합 → 4) 버킷 합 → 5) 종료 포지션 수
+    var evaluated = pickNum(s, ['evaluated', 'evaluatedCount', 'evaluable', 'scored', 'sample', 'sampleSize', 'nEvaluated']);
+    var pending = pickNum(s, ['pending', 'pendingCount', 'unevaluated']);
+    if (evaluated === null && out.total !== null && pending !== null) evaluated = out.total - pending;
+    if (evaluated === null) {
+      var modeSum = null;
+      Object.keys(out.byMode).forEach(function (k) {
+        var v = pickNum(out.byMode[k], ['evaluated', 'evaluatedCount', 'scored']);
+        if (v !== null) modeSum = (modeSum === null ? 0 : modeSum) + v;
+      });
+      evaluated = modeSum;
+    }
+    if (evaluated === null && out.buckets.length) {
+      var bSum = null;
+      out.buckets.forEach(function (b) { if (b.n !== null) bSum = (bSum === null ? 0 : bSum) + b.n; });
+      evaluated = bSum;
+    }
+    out.evaluatedFromPositions = false;
+    if (evaluated === null) {
+      var closed = pickNum(pos, ['closedCount', 'closed']);
+      if (closed !== null) { evaluated = closed; out.evaluatedFromPositions = true; }
+    }
+    out.evaluated = evaluated;
+    out.pending = (pending !== null) ? pending
+      : (out.total !== null && evaluated !== null ? Math.max(0, out.total - evaluated) : null);
+
+    // --- 성과 지표: 최상위에 없으면 positions.summary()에서 끌어온다(출처를 표기한다) ---
+    function metric(topKeys, posKeys, isRate) {
+      var v = isRate ? asRate(pick(s, topKeys)) : pickNum(s, topKeys);
+      if (v !== null) return { value: v, from: 'stats' };
+      var p = isRate ? asRate(pick(pos, posKeys)) : pickNum(pos, posKeys);
+      if (p !== null) return { value: p, from: 'positions' };
+      return { value: null, from: null };
+    }
+    out.winRate      = metric(['winRate', 'hitRate'], ['winRate'], true);
+    out.avgRR        = metric(['avgRR', 'avgRiskReward', 'rrAvg'], ['avgRR'], false);
+    out.expectancy   = metric(['expectancyPct', 'expectancy'], ['expectancyPct', 'expectancy'], false);
+    out.profitFactor = metric(['profitFactor', 'pf'], ['profitFactor'], false);
+
+    return out;
+  }
+
+  /* ------------------------------------------------------------------
+     1. 요약 카드
+     ------------------------------------------------------------------ */
+  function renderCards(d) {
+    var wrap = $('#cards');
+    wrap.innerHTML = '';
+    var weak = !(d.evaluated !== null && d.evaluated >= MIN_SAMPLE);   // 표본 확인 불가도 '약함'으로 본다
+
+    var subEval = null;
+    if (d.pending !== null) subEval = '평가불가 ' + fmtInt(d.pending) + '건 제외';
+    if (d.evaluatedFromPositions) subEval = '종료된 가상 포지션 수 기준';
+
+    var items = [
+      { key: '총 판정 수',   val: fmtInt(d.total),                   sub: null,   cls: '',     flag: false },
+      { key: '평가 가능 표본', val: d.evaluated === null ? null : fmtInt(d.evaluated) + ' / ' + (d.total === null ? '?' : fmtInt(d.total)),
+        sub: subEval, cls: weak ? 'down' : '', flag: false },
+      { key: '승률',        val: fmtPct(d.winRate.value),           sub: srcNote(d.winRate),      cls: 'gold', flag: weak },
+      { key: '손익비 평균',  val: d.avgRR.value === null ? null : fmtNum(d.avgRR.value) + 'R', sub: srcNote(d.avgRR), cls: '', flag: weak },
+      { key: '기대값',      val: fmtSignedPct(d.expectancy.value),  sub: srcNote(d.expectancy),   cls: signCls(d.expectancy.value), flag: weak },
+      { key: '프로핏 팩터',  val: fmtNum(d.profitFactor.value),      sub: srcNote(d.profitFactor), cls: pfCls(d.profitFactor.value), flag: weak }
+    ];
+
+    items.forEach(function (it) {
+      var c = el('div', 'card' + (it.cls ? ' ' + it.cls : ''));
+      c.appendChild(el('div', 'c-key', it.key));
+      if (it.val === null) {
+        c.appendChild(el('div', 'c-val na', '데이터 없음'));
+      } else {
+        c.appendChild(el('div', 'c-val', it.val));
+        if (it.flag) c.appendChild(el('div', 'c-flag', '참고용'));
+      }
+      if (it.sub) c.appendChild(el('div', 'c-sub', it.sub));
+      wrap.appendChild(c);
+    });
+
+    function srcNote(m) { return m.from === 'positions' ? '가상 포지션 기준' : null; }
+    function signCls(v) { return v === null ? '' : (v > 0 ? 'up' : (v < 0 ? 'down' : '')); }
+    function pfCls(v)   { return v === null ? '' : (v >= 1 ? 'up' : 'down'); }
+  }
+
+  /* ------------------------------------------------------------------
+     표본 부족 경고 — 승률을 신뢰하게 만들지 않는 것이 이 배너의 목적
+     ------------------------------------------------------------------ */
+  function renderWarning(d) {
+    var box = $('#small-sample');
+    var title = $('#ss-title');
+    var desc = $('#ss-desc');
+    var n = d.evaluated;
+
+    if (n === null) {
+      box.classList.add('show');
+      title.textContent = '표본 수 확인 불가 — 통계적 유의성 없음';
+      desc.textContent = '평가 가능 표본 수를 서버 응답에서 확인하지 못했다. 아래 승률·기대값·프로핏 팩터는 근거 표본을 알 수 없으므로 성과 지표로 읽지 마라.';
+      return;
+    }
+    if (n < MIN_SAMPLE) {
+      box.classList.add('show');
+      title.textContent = '통계적 유의성 없음 — 평가 표본 ' + fmtInt(n) + '건';
+      desc.textContent = '표본이 ' + MIN_SAMPLE + '건 미만이면 승률은 사실상 우연이다. ' +
+        '예를 들어 실력이 전혀 없어도(참 승률 50%) ' + fmtInt(n) + '건 중 우연히 높은 승률이 나오는 일은 흔하다. ' +
+        '아래 숫자는 기록 확인용이지 성과 지표가 아니다. 이 수치로 실제 매매 판단을 하지 마라.';
+      return;
+    }
+    box.classList.remove('show');
+    title.textContent = '';
+    desc.textContent = '';
+  }
+
+  /* ------------------------------------------------------------------
+     2. 모드별 비교
+     ------------------------------------------------------------------ */
+  var MODES = [
+    { key: 'algo',   label: '알고리즘 (algo)' },
+    { key: 'scalp',  label: '스캘핑 (scalp)' },
+    { key: 'attack', label: '공격 (attack)' }
+  ];
+
+  function renderModes(d) {
+    var tb = $('#mode-body');
+    tb.innerHTML = '';
+
+    MODES.forEach(function (m) {
+      var v = d.byMode[m.key];
+      var tr = el('tr');
+
+      var nameTd = el('td');
+      nameTd.appendChild(el('span', 'mode-tag', m.label));
+      tr.appendChild(nameTd);
+
+      if (!v || typeof v !== 'object') {
+        var td = el('td', 'na', '데이터 없음');
+        td.colSpan = 5;
+        td.style.textAlign = 'left';
+        tr.appendChild(td);
+        tb.appendChild(tr);
+        return;
+      }
+
+      var total = pickNum(v, ['total', 'n', 'count', 'decisions']);
+      var evaluated = pickNum(v, ['evaluated', 'evaluatedCount', 'scored', 'samples']);
+      var winRate = asRate(pick(v, ['winRate', 'hitRate', 'accuracy']));
+      var avgRet = pickNum(v, ['avgReturnPct', 'avgReturn', 'avgPct', 'avgPnlPct']);
+      var avgRR = pickNum(v, ['avgRR', 'avgRiskReward', 'rr']);
+
+      tr.appendChild(setCell(el('td'), fmtInt(total)));
+      tr.appendChild(setCell(el('td'), fmtInt(evaluated)));
+
+      // 승률 — 표본이 적으면 칩으로 못 박아둔다
+      var wTd = el('td');
+      if (winRate === null) { wTd.textContent = '데이터 없음'; wTd.classList.add('na'); }
+      else {
+        wTd.textContent = fmtPct(winRate);
+        var base = (evaluated !== null) ? evaluated : total;
+        if (base !== null && base < MIN_SAMPLE) {
+          wTd.appendChild(document.createTextNode(' '));
+          wTd.appendChild(el('span', 'chip warnchip', '표본부족'));
+        }
+      }
+      tr.appendChild(wTd);
+
+      var rTd = el('td');
+      if (avgRet === null) { rTd.textContent = '데이터 없음'; rTd.classList.add('na'); }
+      else { rTd.textContent = fmtSignedPct(avgRet); rTd.className = avgRet > 0 ? 'up' : (avgRet < 0 ? 'down' : ''); }
+      tr.appendChild(rTd);
+
+      tr.appendChild(setCell(el('td'), avgRR === null ? null : fmtNum(avgRR) + 'R'));
+      tb.appendChild(tr);
+    });
+  }
+
+  /* ------------------------------------------------------------------
+     3. 캘리브레이션 차트 (canvas 직접 드로잉)
+     ------------------------------------------------------------------ */
+  function pointColor(b) {
+    if (b.gap === null) return '#9a9ab4';
+    if (b.gap < -GOOD_GAP) return '#f85149';   // 실제 < 예측 → 과신
+    if (b.gap > GOOD_GAP) return '#4a9de8';    // 실제 > 예측 → 과소평가
+    return '#e8c84a';
+  }
+
+  function drawCalibration(d) {
+    var cv = $('#calib');
+    if (!cv) return;
+    var cssW = Math.max(420, cv.clientWidth || 640);
+    var cssH = 380;
+    var dpr = Math.max(1, Math.min(2, Math.floor(window.devicePixelRatio || 1)));
+    cv.width = Math.round(cssW * dpr);
+    cv.height = Math.round(cssH * dpr);
+
+    var ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    ctx.imageSmoothingEnabled = false;
+
+    var pad = { l: 56, r: 22, t: 22, b: 54 };
+    var pw = cssW - pad.l - pad.r;
+    var ph = cssH - pad.t - pad.b;
+    var X = function (v) { return pad.l + (v / 100) * pw; };
+    var Y = function (v) { return pad.t + (1 - v / 100) * ph; };
+
+    // 배경
+    ctx.fillStyle = '#08080e';
+    ctx.fillRect(0, 0, cssW, cssH);
+
+    // 과신/과소 영역 음영
+    ctx.fillStyle = 'rgba(248,81,73,0.07)';
+    ctx.beginPath(); ctx.moveTo(X(0), Y(0)); ctx.lineTo(X(100), Y(0)); ctx.lineTo(X(100), Y(100)); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(74,157,232,0.06)';
+    ctx.beginPath(); ctx.moveTo(X(0), Y(0)); ctx.lineTo(X(0), Y(100)); ctx.lineTo(X(100), Y(100)); ctx.closePath(); ctx.fill();
+
+    // 격자
+    ctx.font = '10px Galmuri11, monospace';
+    ctx.textBaseline = 'middle';
+    for (var g = 0; g <= 100; g += 10) {
+      var major = (g % 25 === 0);
+      ctx.strokeStyle = major ? '#23233a' : '#151520';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(Math.round(X(g)) + 0.5, Y(0)); ctx.lineTo(Math.round(X(g)) + 0.5, Y(100)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(X(0), Math.round(Y(g)) + 0.5); ctx.lineTo(X(100), Math.round(Y(g)) + 0.5); ctx.stroke();
+      if (major) {
+        ctx.fillStyle = '#5a5a72';
+        ctx.textAlign = 'center';
+        ctx.fillText(g + '%', X(g), Y(0) + 14);
+        ctx.textAlign = 'right';
+        ctx.fillText(g + '%', pad.l - 8, Y(g));
+      }
+    }
+
+    // 축 테두리
+    ctx.strokeStyle = '#2a2a3c';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(pad.l, pad.t, pw, ph);
+
+    // 완벽한 보정선(대각선)
+    ctx.save();
+    ctx.setLineDash([6, 5]);
+    ctx.strokeStyle = 'rgba(232,200,74,0.65)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(X(0), Y(0)); ctx.lineTo(X(100), Y(100)); ctx.stroke();
+    ctx.restore();
+
+    // 영역 라벨
+    ctx.font = '11px Galmuri11, monospace';
+    ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(248,81,73,0.55)';
+    ctx.fillText('과신 영역 (예측 > 실제)', X(98), Y(14));
+    ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(74,157,232,0.55)';
+    ctx.fillText('과소평가 영역 (예측 < 실제)', X(2), Y(92));
+
+    // 축 제목
+    ctx.fillStyle = '#9a9ab4';
+    ctx.textAlign = 'center';
+    ctx.fillText('예측 확신도 (%)', pad.l + pw / 2, cssH - 14);
+    ctx.save();
+    ctx.translate(14, pad.t + ph / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('실제 적중률 (%)', 0, 0);
+    ctx.restore();
+
+    // 그릴 수 있는 점만 추린다 (예측/실제 둘 다 있어야 한다 — 없는 값은 만들지 않는다)
+    var pts = (d ? d.buckets : []).filter(function (b) { return b.predicted !== null && b.actual !== null; })
+      .slice().sort(function (a, b) { return a.predicted - b.predicted; });
+    var skipped = (d ? d.buckets.length : 0) - pts.length;
+
+    if (!pts.length) {
+      // 안내문이 대각선·영역 라벨과 겹치지 않도록 바탕을 깔아준다
+      var bw = Math.min(pw - 20, 340), bh = 62;
+      var bx = pad.l + (pw - bw) / 2, by = pad.t + (ph - bh) / 2;
+      ctx.fillStyle = '#0d0d16';
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeStyle = '#2a2a3c'; ctx.lineWidth = 2;
+      ctx.strokeRect(bx, by, bw, bh);
+      ctx.fillStyle = '#8a8aa4';
+      ctx.textAlign = 'center';
+      ctx.font = '13px Galmuri11, monospace';
+      ctx.fillText('표시할 캘리브레이션 표본이 없다', pad.l + pw / 2, by + 24);
+      ctx.font = '11px Galmuri11, monospace';
+      ctx.fillStyle = '#5a5a72';
+      ctx.fillText('판정이 쌓이고 결과가 평가되면 여기에 점이 찍힌다', pad.l + pw / 2, by + 44);
+      calibPoints = [];
+      renderCalibNote(d, skipped, 0);
+      return;
+    }
+
+    // 점 연결선
+    if (pts.length > 1) {
+      ctx.strokeStyle = 'rgba(232,200,74,0.28)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      pts.forEach(function (b, i) {
+        var px = X(clamp(b.predicted)), py = Y(clamp(b.actual));
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+    }
+
+    // 점 — 픽셀 톤을 위해 원 대신 사각형
+    calibPoints = [];
+    pts.forEach(function (b) {
+      var px = Math.round(X(clamp(b.predicted)));
+      var py = Math.round(Y(clamp(b.actual)));
+      var n = b.n === null ? 0 : b.n;
+      var sz = Math.round(Math.min(19, 7 + Math.sqrt(Math.max(0, n)) * 2.4));
+      if (sz % 2 === 0) sz += 1;
+      var half = (sz - 1) / 2;
+      var col = pointColor(b);
+
+      // 대각선까지 이어지는 오차 막대
+      ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px + 0.5, py + 0.5);
+      ctx.lineTo(px + 0.5, Math.round(Y(clamp(b.predicted))) + 0.5);
+      ctx.stroke();
+
+      if (b.derivedPredicted) {
+        // 예측값을 버킷 라벨에서 유도한 점 — 속을 비워 구분한다
+        ctx.fillStyle = '#08080e';
+        ctx.fillRect(px - half, py - half, sz, sz);
+        ctx.strokeStyle = col; ctx.lineWidth = 2;
+        ctx.strokeRect(px - half + 1, py - half + 1, sz - 2, sz - 2);
+      } else {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(px - half - 1, py - half - 1, sz + 2, sz + 2);
+        ctx.fillStyle = col;
+        ctx.fillRect(px - half, py - half, sz, sz);
+      }
+
+      // 라벨
+      ctx.font = '10px Galmuri11, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#b9b9cc';
+      var ly = (b.actual >= 88) ? py + half + 14 : py - half - 6;
+      ctx.fillText(b.label + (b.n === null ? '' : ' n=' + b.n), px, ly);
+
+      calibPoints.push({ x: px, y: py, r: half + 6, b: b });
+    });
+
+    renderCalibNote(d, skipped, pts.length);
+
+    function clamp(v) { return Math.max(0, Math.min(100, v)); }
+  }
+
+  function renderCalibNote(d, skipped, shown) {
+    var box = $('#calib-note');
+    var msgs = [];
+    if (d && d.usedFallbackBuckets) msgs.push('· calibration 필드가 비어 있어 byConfidence로 대체 표시했다.');
+    if (skipped > 0) msgs.push('· 예측 또는 실제 적중률이 없는 버킷 ' + skipped + '개는 그리지 않았다(추정값을 만들지 않는다).');
+    var derived = (d ? d.buckets : []).filter(function (b) { return b.derivedPredicted && b.actual !== null; }).length;
+    if (derived > 0) msgs.push('· 예측값이 없어 버킷 라벨 중앙값으로 대체한 점 ' + derived + '개는 속이 빈 사각형이다.');
+    if (shown > 0 && shown < 3) msgs.push('· 버킷이 ' + shown + '개뿐이라 보정 곡선의 형태는 판단할 수 없다.');
+    box.textContent = msgs.join('\n');
+    box.style.whiteSpace = 'pre-line';
+  }
+
+  function renderBucketTable(d) {
+    var tb = $('#bucket-body');
+    tb.innerHTML = '';
+    if (!d.buckets.length) {
+      var tr0 = el('tr');
+      var td0 = el('td', 'na', '확신도 버킷 데이터 없음');
+      td0.colSpan = 6; td0.style.textAlign = 'left';
+      tr0.appendChild(td0); tb.appendChild(tr0);
+      return;
+    }
+    d.buckets.slice().sort(function (a, b) {
+      var pa = a.predicted === null ? -1 : a.predicted, pb = b.predicted === null ? -1 : b.predicted;
+      return pa - pb;
+    }).forEach(function (b) {
+      var tr = el('tr');
+      var lt = el('td');
+      lt.appendChild(document.createTextNode(b.label));
+      if (b.derivedPredicted) { lt.appendChild(document.createTextNode(' ')); lt.appendChild(el('span', 'chip', '중앙값')); }
+      tr.appendChild(lt);
+      tr.appendChild(setCell(el('td'), fmtInt(b.n)));
+      tr.appendChild(setCell(el('td'), fmtPct(b.predicted)));
+      tr.appendChild(setCell(el('td'), fmtPct(b.actual)));
+
+      var gt = el('td');
+      if (b.gap === null) { gt.textContent = '데이터 없음'; gt.classList.add('na'); }
+      else {
+        gt.textContent = (b.gap > 0 ? '+' : '') + b.gap.toFixed(1) + '%p ' + (b.gap < -GOOD_GAP ? '(과신)' : b.gap > GOOD_GAP ? '(과소)' : '(양호)');
+        gt.className = b.gap < -GOOD_GAP ? 'down' : (b.gap > GOOD_GAP ? 'up' : '');
+      }
+      tr.appendChild(gt);
+
+      var rt = el('td');
+      if (b.avgReturnPct === null) { rt.textContent = '데이터 없음'; rt.classList.add('na'); }
+      else { rt.textContent = fmtSignedPct(b.avgReturnPct); rt.className = b.avgReturnPct > 0 ? 'up' : (b.avgReturnPct < 0 ? 'down' : ''); }
+      tr.appendChild(rt);
+
+      tb.appendChild(tr);
+    });
+  }
+
+  // 캔버스 툴팁
+  function bindCalibHover() {
+    var cv = $('#calib');
+    var tip = $('#calib-tip');
+    var wrap = $('#calib-wrap');
+    if (!cv || !tip) return;
+
+    cv.addEventListener('mousemove', function (ev) {
+      var rect = cv.getBoundingClientRect();
+      var mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+      var hit = null;
+      for (var i = 0; i < calibPoints.length; i++) {
+        var p = calibPoints[i];
+        if (Math.abs(mx - p.x) <= p.r && Math.abs(my - p.y) <= p.r) { hit = p; break; }
+      }
+      if (!hit) { tip.style.display = 'none'; return; }
+      var b = hit.b;
+      var lines = [
+        '버킷 ' + b.label,
+        '표본 ' + (b.n === null ? '데이터 없음' : b.n + '건'),
+        '예측 ' + (fmtPct(b.predicted) || '데이터 없음') + (b.derivedPredicted ? ' (버킷 중앙값)' : ''),
+        '실제 ' + (fmtPct(b.actual) || '데이터 없음'),
+        '격차 ' + (b.gap === null ? '데이터 없음' : (b.gap > 0 ? '+' : '') + b.gap.toFixed(1) + '%p ' + (b.gap < -GOOD_GAP ? '과신' : b.gap > GOOD_GAP ? '과소평가' : '양호'))
+      ];
+      tip.innerHTML = '';
+      lines.forEach(function (t, i) {
+        var row = el('div', i === 0 ? 'tt' : null, t);
+        tip.appendChild(row);
+      });
+      tip.style.display = 'block';
+      var tw = tip.offsetWidth, th = tip.offsetHeight;
+      var left = hit.x + 14, top = hit.y - th - 10;
+      if (left + tw > wrap.clientWidth) left = hit.x - tw - 14;
+      if (top < 0) top = hit.y + 16;
+      tip.style.left = Math.max(0, left) + 'px';
+      tip.style.top = Math.max(0, top) + 'px';
+    });
+    cv.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+  }
+
+  /* ------------------------------------------------------------------
+     4. 가상 포지션 요약
+     ------------------------------------------------------------------ */
+  function renderPositions(d) {
+    var grid = $('#pos-grid');
+    grid.innerHTML = '';
+    var p = d.positions || {};
+    var cells = [
+      { k: '진행 중', v: fmtInt(pickNum(p, ['openCount', 'open'])) === null ? null : fmtInt(pickNum(p, ['openCount', 'open'])) + '건' },
+      { k: '종료',   v: fmtInt(pickNum(p, ['closedCount', 'closed'])) === null ? null : fmtInt(pickNum(p, ['closedCount', 'closed'])) + '건' },
+      { k: '승률',   v: fmtPct(asRate(pick(p, ['winRate']))) },
+      { k: '평균 수익', v: fmtSignedPct(pickNum(p, ['avgWinPct'])) },
+      { k: '평균 손실', v: fmtSignedPct(pickNum(p, ['avgLossPct'])) },
+      { k: '프로핏 팩터', v: fmtNum(pickNum(p, ['profitFactor'])) },
+      { k: '기대값',  v: fmtSignedPct(pickNum(p, ['expectancyPct', 'expectancy'])) },
+      { k: '평균 R:R', v: pickNum(p, ['avgRR']) === null ? null : fmtNum(pickNum(p, ['avgRR'])) + 'R' }
+    ];
+    cells.forEach(function (c) {
+      var box = el('div', 'pos-cell');
+      box.appendChild(el('div', 'p-key', c.k));
+      box.appendChild(el('div', c.v === null ? 'p-val na' : 'p-val', c.v === null ? '데이터 없음' : c.v));
+      grid.appendChild(box);
+    });
+    if (!Object.keys(p).length) {
+      grid.innerHTML = '';
+      var only = el('div', 'pos-cell');
+      only.appendChild(el('div', 'p-key', '가상 포지션'));
+      only.appendChild(el('div', 'p-val na', '데이터 없음 — positions 필드가 비어 있다'));
+      only.style.gridColumn = '1 / -1';
+      grid.appendChild(only);
+    }
+  }
+
+  /* ------------------------------------------------------------------
+     5. 최근 판정 20건
+     ------------------------------------------------------------------ */
+  function resultOf(r) {
+    var raw = pick(r, ['result', 'outcome', 'status', 'hit', 'evaluation']);
+    if (raw === null && r && r.pending === true) return { label: '평가불가', cls: 'pend' };
+    if (raw === true) return { label: '승', cls: 'win' };
+    if (raw === false) return { label: '패', cls: 'loss' };
+    var t = String(raw === null ? '' : raw).toLowerCase();
+    if (t === '') return { label: '평가불가', cls: 'pend' };
+    if (['win', 'won', 'hit', 'tp', 'target', 'success', 'correct', '승'].indexOf(t) >= 0) return { label: '승', cls: 'win' };
+    if (['loss', 'lose', 'lost', 'miss', 'sl', 'stop', 'fail', 'wrong', '패'].indexOf(t) >= 0) return { label: '패', cls: 'loss' };
+    if (['pending', 'open', 'unknown', 'na', 'n/a', 'unevaluated', '평가불가'].indexOf(t) >= 0) return { label: '평가불가', cls: 'pend' };
+    return { label: String(raw), cls: 'pend' };   // 모르는 값은 그대로 노출한다(임의 해석 금지)
+  }
+
+  function actionCls(a) {
+    var t = String(a || '').toUpperCase();
+    if (['BUY', 'LONG'].indexOf(t) >= 0) return 'buy';
+    if (['SELL', 'SHORT'].indexOf(t) >= 0) return 'sell';
+    return 'hold';
+  }
+
+  function renderRecent(d) {
+    var tb = $('#recent-body');
+    tb.innerHTML = '';
+    var rows = Array.isArray(d.raw.recent) ? d.raw.recent.slice(0, 20) : [];
+    if (!rows.length) {
+      var tr0 = el('tr');
+      var td0 = el('td', 'na', '최근 판정 데이터 없음');
+      td0.colSpan = 7; td0.style.textAlign = 'left';
+      tr0.appendChild(td0); tb.appendChild(tr0);
+      return;
+    }
+    rows.forEach(function (r) {
+      if (!r || typeof r !== 'object') return;
+      var tr = el('tr');
+      tr.appendChild(setCell(el('td'), fmtTime(pick(r, ['ts', 'time', 'at', 'date']))));
+      tr.appendChild(setCell(el('td'), pick(r, ['symbol', 'sym'])));
+
+      var md = el('td');
+      var mv = pick(r, ['mode']);
+      if (mv === null) { md.textContent = '데이터 없음'; md.classList.add('na'); }
+      else { md.appendChild(el('span', 'mode-tag', String(mv))); }
+      tr.appendChild(md);
+
+      var at = el('td');
+      var av = pick(r, ['action', 'decision', 'scalpBias']);
+      if (av === null) { at.textContent = '데이터 없음'; at.classList.add('na'); }
+      else { at.appendChild(el('span', 'chip ' + actionCls(av), String(av))); }
+      tr.appendChild(at);
+
+      var conf = pickNum(r, ['confidence', 'conf']);
+      tr.appendChild(setCell(el('td'), conf === null ? null : fmtInt(conf) + '%'));
+
+      var rr = pickNum(r, ['rr', 'riskReward', 'RR']);
+      tr.appendChild(setCell(el('td'), rr === null ? null : fmtNum(rr) + 'R'));
+
+      var res = resultOf(r);
+      var rt = el('td');
+      rt.appendChild(el('span', 'chip ' + res.cls, res.label));
+      tr.appendChild(rt);
+
+      tb.appendChild(tr);
+    });
+  }
+
+  /* ------------------------------------------------------------------
+     렌더 진입점
+     ------------------------------------------------------------------ */
+  function render(raw) {
+    var d = normalize(raw);
+    lastNorm = d;
+
+    renderWarning(d);
+    renderCards(d);
+    renderModes(d);
+    drawCalibration(d);
+    renderBucketTable(d);
+    renderPositions(d);
+    renderRecent(d);
+
+    var np = $('#note-panel');
+    if (d.note) { $('#note-box').textContent = String(d.note); np.style.display = ''; }
+    else { np.style.display = 'none'; }
+
+    var stampText = d.generatedAt ? ('집계 ' + (fmtTime(d.generatedAt) || d.generatedAt)) : '';
+    $('#stamp').textContent = (stampText ? stampText + ' · ' : '') + '조회 ' + fmtTime(new Date().toISOString());
+  }
+
+  // 서버가 아직 없거나 오류일 때도 화면 골격은 유지한다
+  function renderEmptyShell() {
+    render({ total: null, byMode: {}, byConfidence: [], calibration: [], recent: [], positions: {} });
+  }
+
+  function notice(msg, kind) {
+    var n = $('#notice');
+    n.className = kind || '';
+    n.textContent = msg;
+  }
+  function hideNotice() {
+    var n = $('#notice');
+    n.className = 'hidden';
+    n.textContent = '';
+  }
+
+  /* ------------------------------------------------------------------
+     데이터 로드
+     ------------------------------------------------------------------ */
+  function load() {
+    // 테스트용 주입: window.__STATS_MOCK__ 이 있으면 네트워크를 타지 않는다
+    if (window.__STATS_MOCK__) {
+      notice('주입된 목업 데이터로 렌더 중이다 (window.__STATS_MOCK__).', 'warn');
+      render(window.__STATS_MOCK__);
+      return;
+    }
+
+    notice('성적표를 불러오는 중…');
+    fetch(API, { headers: { accept: 'application/json' }, cache: 'no-store' })
+      .then(function (res) {
+        if (!res.ok) {
+          if (res.status === 503) {
+            notice('성적표 API가 아직 준비되지 않았다 (HTTP 503). 서버에 /api/stats 가 배선되면 자동으로 채워진다. 아래는 빈 골격이다.', 'warn');
+          } else if (res.status === 404) {
+            notice('성적표 API를 찾을 수 없다 (HTTP 404). /api/stats 라우트가 아직 없는 상태다. 아래는 빈 골격이다.', 'warn');
+          } else {
+            notice('성적표 API 오류 (HTTP ' + res.status + '). 아래는 빈 골격이다.', 'err');
+          }
+          renderEmptyShell();
+          return null;
+        }
+        return res.json();
+      })
+      .then(function (data) {
+        if (data === null || data === undefined) return;
+        hideNotice();
+        render(data);
+      })
+      .catch(function (err) {
+        notice('성적표를 불러오지 못했다: ' + (err && err.message ? err.message : String(err)) +
+               ' — 서버가 떠 있는지, /api/stats 응답이 JSON인지 확인하라. 아래는 빈 골격이다.', 'err');
+        renderEmptyShell();
+      });
+  }
+
+  /* ------------------------------------------------------------------
+     부팅
+     ------------------------------------------------------------------ */
+  function boot() {
+    bindCalibHover();
+    $('#reload').addEventListener('click', load);
+
+    var rt = null;
+    window.addEventListener('resize', function () {
+      clearTimeout(rt);
+      rt = setTimeout(function () { drawCalibration(lastNorm); }, 120);
+    });
+
+    // 폰트가 늦게 오면 캔버스 글자가 기본 폰트로 굳으므로 로드 후 한 번 더 그린다
+    if (document.fonts && document.fonts.ready && document.fonts.ready.then) {
+      document.fonts.ready.then(function () { drawCalibration(lastNorm); });
+    }
+
+    // 검증·디버그용 훅 (콘솔에서 FLOOR_STATS.render(가짜JSON) 호출)
+    window.FLOOR_STATS = { render: render, load: load, normalize: normalize };
+
+    load();
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node server/session-prep.js:*)",
+      "Bash(node server/append-decision.js:*)",
+      "Bash(node --test:*)",
+      "Bash(npm start:*)",
+      "Bash(npm test:*)",
+      "Edit(reports/**)",
+      "Edit(public/**)",
+      "Edit(server/**)"
+    ]
+  }
+}
