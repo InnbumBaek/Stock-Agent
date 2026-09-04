@@ -1,0 +1,12 @@
+node_modules/
+reports/*.md
+reports/decisions.json
+.env
+
+# vendor: 대용량·임베디드 repo는 추적하지 않는다
+vendor/ta-venv/
+vendor/TradingAgents/
+
+# v2: 개인 설정·매매장부는 절대 추적하지 않는다 (텔레그램 토큰 포함)
+config.json
+reports/positions.json

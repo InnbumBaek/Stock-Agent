@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1200">
+  <title>PIXEL TRADING FLOOR</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/galmuri/dist/galmuri.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- CRT scanline overlay -->
+  <div class="crt" aria-hidden="true"></div>
+
+  <!-- ===== 급변동 알림 배너 (v2) ===== -->
+  <div id="alert-banner" class="hidden" role="status" aria-live="polite">
+    <span id="ab-sev">INFO</span>
+    <span id="ab-msg"></span>
+    <button id="ab-close" type="button" title="닫기">✕</button>
+  </div>
+
+  <div id="app">
+    <!-- ===== TOP BAR ===== -->
+    <header id="topbar">
+      <div id="logo">◆ PIXEL TRADING FLOOR ◆</div>
+      <div id="controls">
+        <input id="symbol-input" type="text" placeholder="BTC, 하이닉스, 삼성전자…" autocomplete="off" spellcheck="false" maxlength="12">
+        <div id="mode-toggle">
+          <button id="mode-algo" class="mode-btn active" type="button">알고리즘</button>
+          <button id="mode-scalp" class="mode-btn" type="button">⚡스캘핑 20x</button>
+          <button id="mode-attack" class="mode-btn" type="button">⚔공격</button>
+        </div>
+        <button id="analyze-btn" type="button">▶ ANALYZE</button>
+      </div>
+      <div id="clocks">
+        <div class="clock"><span class="clabel">NYC</span><span id="clock-nyc">--:--:--</span></div>
+        <div class="clock"><span class="clabel">LDN</span><span id="clock-ldn">--:--:--</span></div>
+        <div class="clock"><span class="clabel">SEL</span><span id="clock-sel">--:--:--</span></div>
+      </div>
+    </header>
+
+    <!-- ===== V2 레일 (워치리스트 · 감시 · 리플레이 · 사운드) ===== -->
+    <div id="v2-rail">
+      <span class="rail-label">워치리스트</span>
+      <div id="watchlist-chips"><span class="wl-dim">불러오는 중…</span></div>
+      <button id="watcher-toggle" class="rail-btn" type="button" aria-pressed="false">감시 OFF</button>
+      <span id="watcher-stat"></span>
+      <span class="rail-gap"></span>
+      <button id="stats-btn" class="rail-btn" type="button" title="승률·손익비·캘리브레이션 차트 (새 탭)">📊 성적표</button>
+      <button id="replay-btn" class="rail-btn" type="button">⏵ 리플레이</button>
+      <button id="sound-toggle" class="rail-btn" type="button" aria-pressed="true">♪ 사운드 ON</button>
+    </div>
+
+    <!-- ===== BOARD (전광판) ===== -->
+    <section id="board">
+      <div id="board-info">
+        <span id="board-symbol">—</span>
+        <span id="board-price">—</span>
+        <span id="board-change"></span>
+        <span id="market-badge" class="closed"><i class="dot"></i><span id="market-badge-text">MARKET —</span></span>
+      </div>
+      <div id="chart-wrap">
+        <canvas id="chart"></canvas>
+        <div id="chart-legend">
+          <span class="lg"><i style="background:#e8c84a"></i>MA20</span>
+          <span class="lg"><i style="background:#4a9de8"></i>MA50</span>
+        </div>
+      </div>
+      <!-- 최근 급변동 알림 (v2) -->
+      <div id="alerts-panel">
+        <div id="ap-head"><span id="ap-title">◆ 급변동 알림 ◆</span><span id="ap-count">0</span></div>
+        <div id="ap-list"><div class="ap-empty">알림 없음</div></div>
+      </div>
+    </section>
+
+    <!-- ===== 다중 거래소 전광판 ===== -->
+    <section id="venue-board">
+      <div id="vb-head">
+        <span id="vb-title">◆ 멀티 거래소 전광판 ◆</span>
+        <span id="vb-sub">—</span>
+        <span id="vb-stamp"></span>
+        <button id="vb-toggle" type="button">접기</button>
+      </div>
+      <div id="vb-rows"></div>
+    </section>
+
+    <!-- ===== STAGE (플로어 + 에이전트 콘솔) ===== -->
+    <div id="stage">
+    <main id="floor">
+      <div class="partition v" id="pt-1" aria-hidden="true"></div>
+      <div class="partition v" id="pt-2" aria-hidden="true"></div>
+      <div class="partition" id="pt-3" aria-hidden="true"></div>
+      <!-- 애널리스트 팀 -->
+      <section id="room-analyst" class="room">
+        <div class="eq" aria-hidden="true"></div>
+        <div class="room-label">◆ 애널리스트 팀 ◆</div>
+        <div class="prop plant prop-tl"></div>
+        <div class="prop monitor prop-tr"></div>
+        <div class="room-body analyst-grid">
+          <div class="desk" id="desk-taro">
+            <div class="bubble"></div>
+            <canvas class="sprite" width="48" height="48"></canvas>
+            <div class="nametag">TARO</div>
+            <div class="badge">기술적 분석</div>
+          </div>
+          <div class="desk" id="desk-diana">
+            <div class="bubble"></div>
+            <canvas class="sprite" width="48" height="48"></canvas>
+            <div class="nametag">DIANA</div>
+            <div class="badge">기본적 분석</div>
+          </div>
+          <div class="desk" id="desk-nova">
+            <div class="bubble"></div>
+            <canvas class="sprite" width="48" height="48"></canvas>
+            <div class="nametag">NOVA</div>
+            <div class="badge">뉴스 분석</div>
+          </div>
+          <div class="desk" id="desk-vibe">
+            <div class="bubble"></div>
+            <canvas class="sprite" width="48" height="48"></canvas>
+            <div class="nametag">VIBE</div>
+            <div class="badge">센티먼트</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 스캘핑 데스크 -->
+      <section id="room-scalp" class="room">
+        <div class="eq" aria-hidden="true"></div>
+        <div class="room-label" id="scalp-room-label">◆ 스캘핑 데스크 ◆ 20x</div>
+        <div class="prop led-timer prop-tr"></div>
+        <div class="room-body scalp-body">
+          <div class="desk" id="desk-blitz">
+            <div class="bubble"></div>
+            <canvas class="sprite" width="48" height="48"></canvas>
+            <div class="nametag">BLITZ</div>
+            <div class="badge">스캘퍼</div>
+          </div>
+          <div class="desk" id="desk-guard">
+            <div class="bubble"></div>
+            <canvas class="sprite" width="48" height="48"></canvas>
+            <div class="nametag">GUARD</div>
+            <div class="badge">리스크 관리</div>
+          </div>
+          <div class="desk risk-only" id="desk-risky">
+            <div class="bubble"></div>
+            <canvas class="sprite" width="48" height="48"></canvas>
+            <div class="nametag">RISKY</div>
+            <div class="badge">공격적 리스크</div>
+          </div>
+          <div class="desk risk-only" id="desk-neutral">
+            <div class="bubble"></div>
+            <canvas class="sprite" width="48" height="48"></canvas>
+            <div class="nametag">NEUTRAL</div>
+            <div class="badge">중립적 리스크</div>
+          </div>
+          <div class="desk risk-only" id="desk-safe">
+            <div class="bubble"></div>
+            <canvas class="sprite" width="48" height="48"></canvas>
+            <div class="nametag">SAFE</div>
+            <div class="badge">보수적 리스크</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 리서치룸 -->
+      <section id="room-research" class="room">
+        <div class="eq" aria-hidden="true"></div>
+        <div class="room-label">◆ 리서치룸 ◆</div>
+        <!-- 벽면 뉴스 전광판 (v2) -->
+        <div id="news-marquee" class="empty" aria-hidden="true"><div id="nm-track"></div></div>
+        <div class="prop plant prop-tr"></div>
+        <div class="room-body research-body">
+          <div class="desk" id="desk-bull">
+            <div class="bubble"></div>
+            <canvas class="sprite" width="48" height="48"></canvas>
+            <div class="nametag">BULL</div>
+            <div class="badge">매수 논거</div>
+          </div>
+          <div class="round-table" aria-hidden="true"></div>
+          <div class="desk mirror" id="desk-bear">
+            <div class="bubble"></div>
+            <canvas class="sprite" width="48" height="48"></canvas>
+            <div class="nametag">BEAR</div>
+            <div class="badge">매도 논거</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 트레이딩 본부 -->
+      <section id="room-trading" class="room">
+        <div class="eq" aria-hidden="true"></div>
+        <div class="room-label">◆ 트레이딩 본부 ◆</div>
+        <div class="prop monitor prop-tr"></div>
+        <div class="room-body trading-body">
+          <div class="trading-seats">
+            <div class="desk" id="desk-ace">
+              <div class="bubble"></div>
+              <canvas class="sprite" width="48" height="48"></canvas>
+              <div class="nametag">ACE</div>
+              <div class="badge">수석 트레이더</div>
+            </div>
+            <div class="desk pm-only" id="desk-pm">
+              <div class="bubble"></div>
+              <canvas class="sprite" width="48" height="48"></canvas>
+              <div class="nametag">PM</div>
+              <div class="badge">포트폴리오 매니저</div>
+            </div>
+          </div>
+          <div id="decision-panel">
+            <div class="dp-head"><span>최종 판정</span><button id="dp-card-btn" type="button" title="판정 카드를 PNG로 저장">▣ 카드 저장</button></div>
+            <div id="dp-action">판정 대기 중</div>
+            <div id="dp-gauge"><div id="dp-gauge-fill"></div><span id="dp-conf"></span></div>
+            <!-- 리스크 게이트 (v2) -->
+            <div id="dp-risk" class="hidden">
+              <div class="dp-risk-top">
+                <span id="dp-rr-badge">R:R —</span>
+                <span id="dp-risk-state">—</span>
+              </div>
+              <div id="dp-risk-sizing"></div>
+              <div id="dp-risk-reasons"></div>
+            </div>
+            <div id="dp-levels">
+              <div class="dp-row"><span class="dp-key">진입</span><span id="dp-entry">—</span></div>
+              <div class="dp-row"><span class="dp-key">손절</span><span id="dp-stop">—</span></div>
+              <div class="dp-row"><span class="dp-key">목표</span><span id="dp-target">—</span></div>
+            </div>
+            <div id="dp-verdict" class="hidden"><span id="dp-verdict-badge">—</span><span id="dp-sizing"></span></div>
+            <div id="dp-rationale"></div>
+            <div id="dp-scalp" class="hidden">
+              <div class="dp-scalp-head">⚡ 스캘핑 플랜 (탭비트 20x)</div>
+              <div class="dp-scalp-top"><span id="dp-scalp-bias" class="scalp-badge">—</span></div>
+              <div id="dp-scalp-levels">
+                <div class="dp-row"><span class="dp-key">진입</span><span id="dp-scalp-entry">—</span></div>
+                <div class="dp-row"><span class="dp-key">손절</span><span id="dp-scalp-stop">—</span></div>
+                <div class="dp-row"><span class="dp-key">목표</span><span id="dp-scalp-target">—</span></div>
+              </div>
+              <div id="dp-scalp-note"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ===== AGENT CONSOLE (터미널 로그) ===== -->
+    <aside id="console">
+      <div id="console-head">
+        <span id="console-title">◆ AGENT CONSOLE ◆</span>
+        <div id="console-tabs">
+          <button class="ctab active" data-filter="all" type="button">전체</button>
+          <button class="ctab" data-filter="agent" type="button">에이전트</button>
+          <button class="ctab" data-filter="debate" type="button">토론</button>
+        </div>
+      </div>
+      <div id="console-body"></div>
+      <button id="console-jump" class="hidden" type="button">↓ 새 로그</button>
+      <div id="console-status"><span id="cs-stage">대기 중</span><span id="cs-count"></span></div>
+    </aside>
+
+    <!-- ===== 가상 포지션 패널 (v2) ===== -->
+    <section id="positions-panel" class="hidden">
+      <div id="pp-head">
+        <span id="pp-title">◆ 가상 포지션 ◆</span>
+        <span id="pp-summary">—</span>
+        <button id="pp-toggle" type="button">접기</button>
+      </div>
+      <div id="pp-rows"><div class="pp-empty">오픈 포지션 없음</div></div>
+    </section>
+    </div>
+
+    <!-- ===== TICKER TAPE ===== -->
+    <div id="tape"><div id="tape-track"></div></div>
+
+    <!-- ===== DISCLAIMER ===== -->
+    <footer id="disclaimer">AI 시뮬레이션 — 투자 조언이 아님</footer>
+  </div>
+
+  <!-- ===== MODAL ===== -->
+  <div id="modal" class="hidden">
+    <div class="modal-box">
+      <button id="modal-close" type="button">✕</button>
+      <div id="modal-title"></div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- ===== TOASTS ===== -->
+  <div id="toasts"></div>
+
+  <script src="app.js"></script>
+  <script src="stage.js"></script>
+</body>
+</html>
