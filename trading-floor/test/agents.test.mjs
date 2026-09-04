@@ -9,11 +9,16 @@ const { AGENTS, extractJson, runAgent, buildPrompt } = require('../server/agents
 // ---------------------------------------------------------------------------
 // AGENTS 메타
 // ---------------------------------------------------------------------------
-test('AGENTS: 13종 id·순서·필드 존재', () => {
+test('AGENTS: 16종 id·순서·필드 존재', () => {
+  // 통합으로 세 역할이 늘었다 — FLOW(유동성·체결) · FILING(공시·자본구조) ·
+  // RED(가정 반대심문). 셋 다 원장 실측이 있어야만 도는 역할이라 requiresKi 다.
+  // 기존 13인의 id·상대순서는 그대로여야 한다.
   const ids = AGENTS.map((a) => a.id);
   assert.deepEqual(ids, [
     'taro',
     'diana',
+    'flow',
+    'filing',
     'nova',
     'vibe',
     'bull',
@@ -23,8 +28,15 @@ test('AGENTS: 13종 id·순서·필드 존재', () => {
     'risky',
     'neutral',
     'safe',
+    'red',
     'ace',
     'pm',
+  ]);
+  // 기존 13인은 원장 없이도 도는 역할 그대로다
+  const legacy = ids.filter((id) => !['flow', 'filing', 'red'].includes(id));
+  assert.deepEqual(legacy, [
+    'taro', 'diana', 'nova', 'vibe', 'bull', 'bear', 'blitz', 'guard',
+    'risky', 'neutral', 'safe', 'ace', 'pm',
   ]);
   for (const a of AGENTS) {
     assert.ok(typeof a.name === 'string' && a.name === a.name.toUpperCase(), `${a.id} name 대문자`);

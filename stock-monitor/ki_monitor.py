@@ -5532,6 +5532,91 @@ FACTS_UNITS = {
     "lockup_days": "일 (상장 후 6개월 시점까지 남은 일수, 음수면 경과)",
 }
 
+# 실행 시뮬레이션의 단위 — 값과 함께 나갑니다.
+FACTS_EXEC_UNITS = {
+    "shortfall_med": "bp (실현단가 / 의사결정시점 종가 − 1, 음수면 그만큼 못 받음)",
+    "shortfall_p25": "bp (상위 25% 구간 — 운이 좋았던 시작일)",
+    "shortfall_p75": "bp (하위 25% 구간 — 운이 나빴던 시작일)",
+    "vs_vwap_med": "bp (실현단가 / 같은 기간 VWAP − 1)",
+    "fill_med": "비율 (목표 물량 중 실제 체결된 비중)",
+    "days_med": "영업일 (체결에 실제로 쓴 일수)",
+}
+
+FACTS_EXEC_ASSUMPTIONS = [
+    "실행 시뮬레이션 — 시작일을 바꿔가며 같은 매도를 반복했습니다. 한 구간만 보면 "
+    "운 좋은 창을 고른 것인지 알 수 없어서, 여러 시작점의 분포로 규칙을 비교합니다.",
+    "가격 충격은 제곱근 모형(계수 k)을 가정했습니다. 실제 충격은 호가 두께와 "
+    "당일 수급에 따라 달라집니다.",
+    "하루 참여율 상한을 두었습니다. 상한에 걸리면 목표 물량을 다 못 팔고 "
+    "fill_med 가 1 미만으로 나옵니다 — 그 경우 실현단가만 보면 안 됩니다.",
+]
+
+# 자본구조 — 엑싯 '단가'에 직접 영향을 주는 항목.
+# 리포트(§5 자본구조)에는 있는데 밖으로는 나가지 않았습니다.
+# DART 조회가 필요하므로 --with-disclosures 를 줄 때만 채웁니다.
+FACTS_CAPITAL_UNITS = {
+    "bond_outstanding": "원 (미상환 전환사채·신주인수권부사채 합계)",
+    "shares_total": "주 (발행 보통주 총수)",
+    "treasury": "주 (자기주식)",
+    "top_holder_pct": "비율 (최대주주 및 특수관계인 합계 지분율)",
+    "cb_to_mktcap": "비율 (미상환 사채 / 시가총액 — 잠재 희석의 크기)",
+}
+
+FACTS_CAPITAL_ASSUMPTIONS = [
+    "자본구조는 DART 사업보고서 기준입니다. 보고서 제출 이후의 전환·상환은 "
+    "반영되지 않습니다 — 기준 사업연도(capital.year)를 함께 보십시오.",
+    "리픽싱 시나리오의 전환가 하한은 발행조건에 따라 다릅니다. 여기서는 "
+    "현재가의 70%로 **가정**했습니다(통상적인 하한). 실제 하한은 증권신고서로 "
+    "확인해야 하며, 다르면 희석 규모도 달라집니다.",
+]
+
+
+def _facts_capital(cap_rec: dict | None, close: float | None,
+                   mktcap: float | None, year: str | None) -> dict | None:
+    """미상환 사채·최대주주 지분·발행주식수. 없는 값은 null 로 둡니다."""
+    if not cap_rec:
+        return None
+    bond = cap_rec.get("bond")
+    shares = cap_rec.get("shares_total")
+    out = {
+        "year": year,
+        "bond_outstanding": _jsonable(bond),
+        "bond_rows": [{"note": str(nm), "amount": _jsonable(v)}
+                      for nm, v in (cap_rec.get("bond_rows") or [])][:8],
+        "shares_total": _jsonable(shares),
+        "treasury": _jsonable(cap_rec.get("treasury")),
+        "top_holder_pct": _jsonable(cap_rec.get("top_pct")),
+        "holders": [{"name": h.get("name"), "relate": h.get("relate"),
+                     "shares": _jsonable(h.get("shares")),
+                     "pct": _jsonable(h.get("pct"))}
+                    for h in (cap_rec.get("holders") or [])][:8],
+        "units": FACTS_CAPITAL_UNITS,
+    }
+
+    # 잠재 희석의 크기 — 사채 잔액이 시가총액의 몇 %인가
+    if (bond and mktcap and pd.notna(bond) and pd.notna(mktcap)
+            and float(mktcap) > 0 and float(bond) > 0):
+        out["cb_to_mktcap"] = float(bond) / float(mktcap)
+
+    # 주가가 더 내리면 희석이 얼마나 가속되는가.
+    # 전환가 하한은 가정입니다 — assumptions 에 명시됩니다.
+    if (bond and close and pd.notna(bond) and pd.notna(close)
+            and float(close) > 0 and float(bond) > 0):
+        floor = float(close) * 0.7
+        rows = refix_scenario(float(bond), float(close), floor)
+        out["refix"] = {
+            "floor_assumed_pct": 0.7,
+            "floor_price": _jsonable(floor),
+            "scenarios": [{k: _jsonable(v) for k, v in r.items()} for r in rows],
+        }
+        # 각 시나리오에서 발행주식 대비 희석률
+        if shares and pd.notna(shares) and float(shares) > 0:
+            for r in out["refix"]["scenarios"]:
+                ps = r.get("potential_shares")
+                r["dilution_pct"] = (float(ps) / float(shares)) if ps else None
+    return out
+
+
 # 이 숫자들이 서 있는 가정. 숫자와 분리되면 안 됩니다.
 FACTS_ASSUMPTIONS = [
     "처분 소요일수 — 해당 기준 거래량의 10%만 장내에서 소화한다고 가정합니다. "
@@ -5544,7 +5629,7 @@ FACTS_ASSUMPTIONS = [
     "PER 이 0~60 밖인 종목은 업종 비교에서 제외합니다(이익이 0 근처면 배수가 발산합니다).",
     "분위(pctile) 는 이 원장의 관측기간 안에서의 위치입니다. 관측기간이 짧으면 "
     "분위도 그만큼만 의미합니다 (markets[].n_days 를 보십시오).",
-]
+] + FACTS_EXEC_ASSUMPTIONS + FACTS_CAPITAL_ASSUMPTIONS
 
 FACTS_NOTES = [
     "이 데이터는 측정값입니다. 등급·점수·권고가 아닙니다.",
@@ -5586,6 +5671,57 @@ def _jsonable(v):
     except (TypeError, ValueError):
         pass
     return str(v)
+
+
+
+def _facts_execution(fr: dict, code: str, m: pd.DataFrame,
+                     pct: float = 3.0, horizon: int = 20) -> dict | None:
+    """'어떻게 팔면 얼마에 팔리는가' — 매도 규칙 4종을 과거 구간마다 비교합니다.
+
+    회수 판단에서 가장 결정적인 계산인데 리포트(§3)에만 있고 밖으로 나가지
+    않았습니다. 여기서 같은 함수를 그대로 불러 JSON 으로도 냅니다 —
+    새로 계산하지 않습니다."""
+    mc = m["mktcap"].get(code)
+    px = m["close"].get(code)
+    if not (pd.notna(mc) and pd.notna(px) and px > 0):
+        return None
+    try:
+        r = exit_execution_backtest(
+            fr["close"][code], fr["volume"][code], fr["value"][code],
+            target_shares=(mc / px) * (pct / 100.0),
+            horizon=horizon, step=10)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"  [{code} 실행 시뮬레이션 보류] {type(e).__name__}: {e}",
+              file=sys.stderr)
+        return None
+    if not r.get("ok"):
+        return {"ok": False, "reason": r.get("reason", "산출 불가"),
+                "target_pct": pct, "horizon": horizon}
+
+    rules = {}
+    for key, v in (r.get("rules") or {}).items():
+        rules[key] = {
+            "label": RULE_LABEL.get(key, key),
+            **{k: _jsonable(v.get(k)) for k in FACTS_EXEC_UNITS},
+            "n": _jsonable(v.get("n")),
+        }
+    # 중앙값 기준 실현단가가 가장 나은 규칙. 순위일 뿐 권고가 아닙니다.
+    ranked = sorted(
+        (k for k, v in rules.items() if v.get("shortfall_med") is not None),
+        key=lambda k: rules[k]["shortfall_med"], reverse=True)
+    return {
+        "ok": True,
+        "target_pct": pct,
+        "target_shares": _jsonable((mc / px) * (pct / 100.0)),
+        "horizon": horizon,
+        "starts": _jsonable(r.get("starts")),
+        "sigma": _jsonable(r.get("sigma")),
+        "impact_k": _jsonable(r.get("k")),
+        "rules": rules,
+        # 실현단가 순 정렬. '무엇을 하라'가 아니라 '무엇이 어땠는가' 입니다.
+        "ranked_by_shortfall": ranked,
+        "units": FACTS_EXEC_UNITS,
+    }
 
 
 def _facts_measures(row: pd.Series) -> dict:
@@ -5706,6 +5842,7 @@ def facts_payload(con, codes: list[str], with_disclosures: bool = False) -> dict
 
         # 공시 이벤트는 네트워크가 필요합니다. 요청했을 때만 켭니다.
         dsc = pd.DataFrame()
+        cap_all = {}
         if with_disclosures:
             try:
                 cc = dart_corp_codes().set_index("stock_code")["corp_code"]
@@ -5714,6 +5851,12 @@ def facts_payload(con, codes: list[str], with_disclosures: bool = False) -> dict
                     dsc = unlisted_disclosures(pcc, days=180, limit=60)
             except Exception as e:                      # noqa: BLE001
                 print(f"  [공시 보류] {type(e).__name__}: {e}", file=sys.stderr)
+            # 자본구조 — 미상환 사채·최대주주 지분·발행주식수.
+            # 엑싯 '단가'를 좌우하는데 지금까지 밖으로 나가지 않던 값이다.
+            try:
+                cap_all = portfolio_capital_structure(list(ex.index))
+            except Exception as e:                      # noqa: BLE001
+                print(f"  [자본구조 보류] {type(e).__name__}: {e}", file=sys.stderr)
 
         ex = attach_context(ex, inst, v, dsc, last_day)
 
@@ -5741,6 +5884,13 @@ def facts_payload(con, codes: list[str], with_disclosures: bool = False) -> dict
                 "observations": {k: _jsonable(vv) for k, vv in obs.items()},
                 "volume_profile": [{"price": _jsonable(p), "share": _jsonable(s)}
                                    for p, s in vp],
+                # 어떻게 팔면 얼마에 팔리는가 — 리포트 §3 과 같은 계산
+                "execution": _facts_execution(fr, code, m),
+                # 얼마에 팔리는가의 다른 축 — 희석·물량. --with-disclosures 일 때만.
+                "capital": _facts_capital(cap_all.get(code),
+                                          _jsonable(row.get("close")),
+                                          _jsonable(row.get("mktcap")),
+                                          str(date.today().year - 1)),
             }
 
     out["missing"] = sorted(set(out["missing"]))

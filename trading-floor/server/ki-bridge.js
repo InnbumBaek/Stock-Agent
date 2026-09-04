@@ -322,6 +322,12 @@ function num(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
+// 이 종목이 속한 시장의 관측기간(영업일). 분위의 의미가 여기에 달렸다.
+function mkNDays(facts, market) {
+  const mk = (facts && facts.markets ? facts.markets[market] : null) || null;
+  return mk && Number.isFinite(Number(mk.n_days)) ? Number(mk.n_days) : null;
+}
+
 function pct(v, digits = 0) {
   const n = num(v);
   return n == null ? null : `${(n * 100).toFixed(digits)}%`;
@@ -335,7 +341,7 @@ function pct(v, digits = 0) {
  *
  * @param {object|null} facts  fetchKiFacts 의 반환값
  * @param {string} codeOrSymbol
- * @param {object} [opts] { staleWarnDays }
+ * @param {object} [opts] { staleWarnDays, detail: 'standard'|'full' }
  * @returns {string[]}  비어 있으면 붙일 실측이 없다는 뜻
  */
 function formatKiLines(facts, codeOrSymbol, opts = {}) {
@@ -345,6 +351,15 @@ function formatKiLines(facts, codeOrSymbol, opts = {}) {
   if (!s || s.found !== true) return [];
 
   const warnDays = Number(opts.staleWarnDays ?? DEFAULT_KI.staleWarnDays);
+  // 'full' 은 전담 에이전트(FLOW)용 — 매물대 전 구간·규칙 전체·사분위까지 낸다.
+  const detail = opts.detail === 'full' ? 'full' : 'standard';
+  // 어느 블록을 줄 것인가. 주지 않으면 전부 — 기존 호출자의 동작이 바뀌지 않는다.
+  // 역할을 나눈 이유: 같은 재료를 여러 명이 보면 의견이 상관되고, 전담이 없으면
+  // 아무도 깊이 보지 않는다.
+  const want = Array.isArray(opts.sections) && opts.sections.length
+    ? new Set(opts.sections)
+    : null;
+  const on = (name) => !want || want.has(name);
   const out = [];
   const stale = num(s.stale_days);
 
@@ -370,11 +385,11 @@ function formatKiLines(facts, codeOrSymbol, opts = {}) {
     }
   };
 
-  push('처분 여건 (유동성)', obs.liq);
-  push('가격 위치', obs.px);
-  push('상장·보호예수', obs.cap);
-  push('재무·밸류에이션', obs.fin);
-  push('공시 이벤트', obs.events);
+  if (on('liq')) push('처분 여건 (유동성)', obs.liq);
+  if (on('px')) push('가격 위치', obs.px);
+  if (on('cap')) push('상장·보호예수', obs.cap);
+  if (on('fin')) push('재무·밸류에이션', obs.fin);
+  if (on('events')) push('공시 이벤트', obs.events);
 
   // 관측 문장에 안 들어가는 숫자 몇 개만 따로. 중복은 넣지 않는다.
   const extras = [];
@@ -386,15 +401,167 @@ function formatKiLines(facts, codeOrSymbol, opts = {}) {
   if (num(m.zero_days) != null && m.zero_days > 0) {
     extras.push(`최근 60일 무거래일 ${pct(m.zero_days)}`);
   }
-  if (extras.length) {
+  if (extras.length && on('extras')) {
     out.push('');
     out.push('[추가 측정값]');
     extras.forEach((line) => out.push(`- ${line}`));
   }
 
+  // 매물대 — 어느 가격에서 손바뀜이 많았는가. 그 가격 근처에서 물량이 나온다.
+  const vp = on('profile') && Array.isArray(s.volume_profile) ? s.volume_profile.slice() : [];
+  if (vp.length) {
+    const top = vp
+      .filter((b) => b && num(b.price) != null && num(b.share) != null)
+      .sort((a, b) => b.share - a.share)
+      .slice(0, detail === 'full' ? vp.length : 3);
+    if (top.length) {
+      out.push('');
+      out.push(`[매물대 — 가격대별 거래대금 비중${detail === 'full' ? '' : ' (상위 3개 구간)'}]`);
+      for (const b of top) {
+        out.push(`- ${Math.round(b.price).toLocaleString('en-US')}원 부근 ${pct(b.share, 1)}`);
+      }
+      out.push(
+        '(손바뀜이 많았던 가격대다. 그 근처에서 대기 물량이 나올 가능성을 뜻하며, ' +
+          '지지·저항을 보증하지 않는다.)'
+      );
+    }
+  }
+
+  // 실행 시뮬레이션 — "어떻게 팔면 얼마에 팔리는가". 회수 판단의 핵심이다.
+  const ex = on('exec') ? s.execution : null;
+  if (ex && ex.ok === true && ex.rules) {
+    const order = Array.isArray(ex.ranked_by_shortfall) ? ex.ranked_by_shortfall : Object.keys(ex.rules);
+    const rows = order.map((k) => ex.rules[k]).filter(Boolean);
+    if (rows.length) {
+      out.push('');
+      out.push(
+        `[실행 시뮬레이션 — 시가총액 ${ex.target_pct}% 를 ${ex.horizon}영업일에 걸쳐 매도` +
+          `${ex.starts != null ? ` · 시작일 ${ex.starts}개 구간 반복` : ''}]`
+      );
+      const show = detail === 'full' ? rows : rows.slice(0, 2).concat(rows.slice(-1));
+      const seen = new Set();
+      for (const r of show) {
+        if (seen.has(r.label)) continue;
+        seen.add(r.label);
+        const sf = num(r.shortfall_med);
+        const parts = [`${r.label}: 실현단가 ${sf != null ? `${sf >= 0 ? '+' : ''}${sf.toFixed(0)}bp` : '데이터 없음'}`];
+        if (detail === 'full' && num(r.shortfall_p25) != null && num(r.shortfall_p75) != null) {
+          parts.push(`구간 ${r.shortfall_p25.toFixed(0)}~${r.shortfall_p75.toFixed(0)}bp`);
+        }
+        if (num(r.vs_vwap_med) != null) parts.push(`VWAP 대비 ${r.vs_vwap_med.toFixed(0)}bp`);
+        if (num(r.fill_med) != null) parts.push(`체결률 ${pct(r.fill_med, 0)}`);
+        if (num(r.days_med) != null) parts.push(`소요 ${r.days_med.toFixed(0)}영업일`);
+        out.push(`- ${parts.join(' · ')}`);
+      }
+      out.push(
+        'bp 는 의사결정 시점 종가 대비다. 음수면 그만큼 못 받고 판 것이다. ' +
+          '체결률이 1 미만이면 물량을 다 못 판 것이므로 실현단가만 보면 안 된다. ' +
+          '순서는 과거 실현단가 순일 뿐 권고가 아니다.'
+      );
+    }
+  } else if (ex && ex.ok === false && ex.reason) {
+    out.push('');
+    out.push(`[실행 시뮬레이션] 산출하지 못했다 — ${ex.reason}`);
+  }
+
+  // 자본구조 — 엑싯 '단가'의 다른 축. 팔 수 있는가와 별개로, 팔 때 희석이
+  // 얼마나 진행돼 있는가. DART 조회를 켠 경우에만 채워진다.
+  const cap = on('capital') ? s.capital : null;
+  if (cap) {
+    const lines = [];
+    if (num(cap.bond_outstanding) != null) {
+      lines.push(
+        `미상환 전환사채·BW ${Math.round(cap.bond_outstanding).toLocaleString('en-US')}원` +
+          (num(cap.cb_to_mktcap) != null ? ` — 시가총액의 ${pct(cap.cb_to_mktcap, 1)}` : '')
+      );
+    }
+    if (num(cap.shares_total) != null) {
+      lines.push(
+        `발행 보통주 ${Math.round(cap.shares_total).toLocaleString('en-US')}주` +
+          (num(cap.treasury) != null
+            ? ` · 자기주식 ${Math.round(cap.treasury).toLocaleString('en-US')}주`
+            : '')
+      );
+    }
+    if (num(cap.top_holder_pct) != null) {
+      lines.push(
+        `최대주주 및 특수관계인 ${cap.top_holder_pct.toFixed(2)}% — 같은 창구로 나올 수 있는 물량`
+      );
+    }
+    for (const h of (cap.holders || []).slice(0, 5)) {
+      if (!h || !h.name) continue;
+      lines.push(
+        `  · ${h.name}${h.relate ? ` (${h.relate})` : ''}` +
+          (num(h.pct) != null ? ` ${h.pct.toFixed(2)}%` : '')
+      );
+    }
+    if (lines.length) {
+      out.push('');
+      out.push(`[자본구조 — DART ${cap.year || '?'} 사업보고서 기준]`);
+      lines.forEach((l) => out.push(`- ${l}`));
+    }
+    const rx = cap.refix;
+    if (rx && Array.isArray(rx.scenarios) && rx.scenarios.length) {
+      out.push('');
+      out.push(
+        `[리픽싱 시나리오 — 주가가 더 내리면 희석이 얼마나 가속되는가` +
+          ` (전환가 하한을 현재가의 ${pct(rx.floor_assumed_pct, 0)}로 가정)]`
+      );
+      for (const sc of rx.scenarios) {
+        const p = num(sc.price);
+        const cv = num(sc.conv_price);
+        const ps = num(sc.potential_shares);
+        const dl = num(sc.dilution_pct);
+        if (p == null) continue;
+        out.push(
+          `- 주가 ${Math.round(p).toLocaleString('en-US')}원 → 전환가 ` +
+            `${cv != null ? Math.round(cv).toLocaleString('en-US') : '?'}원` +
+            (ps != null ? ` · 잠재 주식수 ${Math.round(ps).toLocaleString('en-US')}주` : '') +
+            (dl != null ? ` (발행주식의 ${pct(dl, 1)})` : '')
+        );
+      }
+      out.push('전환가 하한은 발행조건에 따라 다르다. 위 하한은 가정이므로 증권신고서로 확인해야 한다.');
+    }
+  }
+
+  // 측정 한계 — 원장이 '재지 못한' 것. 가정을 심문하는 역할(RED)의 재료다.
+  if (on('limits')) {
+    const lim = [];
+    const nd = mkNDays(facts, s.market);
+    if (nd != null) {
+      lim.push(
+        `관측기간 ${nd}영업일 — 이 안에서의 분위(pctile)만 말할 수 있다. ` +
+          `${nd < 120 ? '1년이 안 되므로 분위의 의미가 제한적이다.' : ''}`
+      );
+    }
+    if (num(s.stale_days) != null) {
+      lim.push(`원장 기준일로부터 ${s.stale_days}일 경과 — 그 사이의 사건은 반영돼 있지 않다.`);
+    }
+    const missing = Object.entries(s.measures || {})
+      .filter(([, v]) => v === null)
+      .map(([k]) => k);
+    if (missing.length) {
+      lim.push(
+        `측정하지 못한 값 ${missing.length}개: ${missing.join(', ')} — ` +
+          `표본이 부족했거나 정의되지 않아 산출을 거부한 것이다. 0 이 아니라 '모름'이다.`
+      );
+    }
+    if (s.execution && s.execution.ok === false) {
+      lim.push(`실행 시뮬레이션 산출 실패 — ${s.execution.reason}`);
+    }
+    if (!s.capital) {
+      lim.push('자본구조(미상환 사채·최대주주 지분) 미조회 — 희석 규모를 모르는 상태다.');
+    }
+    if (lim.length) {
+      out.push('');
+      out.push('[이 원장이 재지 못한 것]');
+      lim.forEach((l) => out.push(`- ${l}`));
+    }
+  }
+
   // 시장 국면 — 수준이 아니라 분위로 본다.
   const mk = (facts.markets || {})[s.market];
-  const reg = mk && mk.regime ? mk.regime : null;
+  const reg = on('regime') && mk && mk.regime ? mk.regime : null;
   if (reg) {
     const rows = Object.values(reg)
       .filter((r) => r && r.label && (r.display != null || num(r.value) != null))
@@ -410,7 +577,9 @@ function formatKiLines(facts, codeOrSymbol, opts = {}) {
     }
   }
 
-  const assumptions = Array.isArray(facts.assumptions) ? facts.assumptions : [];
+  const assumptions = on('assumptions') && Array.isArray(facts.assumptions)
+    ? facts.assumptions
+    : [];
   if (assumptions.length) {
     out.push('');
     out.push('[위 숫자가 서 있는 가정]');
