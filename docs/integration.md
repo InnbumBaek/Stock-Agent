@@ -1,13 +1,35 @@
 # 주가 모니터링 ↔ PIXEL TRADING FLOOR — 통합 계약 (단일 진실 소스)
 
 두 프로젝트는 한 저장소에 있지만 **합쳐지지 않았다.** 각자 원래대로 혼자 돌아가고,
-사이에 얇은 계층 하나가 있을 뿐이다. 이 문서는 그 계층의 계약이다.
+사이에 얇은 계층이 있을 뿐이다. 이 문서는 그 계층의 계약이다.
 
 ---
 
-## 0. 왜 합치지 않았는가
+## 0. 무엇을 만들려는 것인가
 
-두 프로젝트는 목적이 반대다.
+**에이전트가 분석하고 판단한다. 그 결과를 회수 판단 리포트에 실어 오프라인 회의에 올린다.**
+
+```
+매일 · 자동                                   주 1회 · 회의
+─────────────────────────────────────────    ──────────────
+KRX·DART 공식 API 로 사실을 잰다
+        ↓
+에이전트 13명이 그 사실을 보고 토론해 판정한다
+        ↓
+측정값 §1~§4 + 에이전트 판정 §5 를 한 리포트로 낸다  →  사람이 읽고 결정한다
+```
+
+주가 모니터링의 설계 원칙인 *"판단은 사람이 합니다"* 는 **파이프라인이 판단하면 안 된다**는
+뜻이 아니다. 자동화가 만든 산출물을 놓고 **최종 의사결정은 회의에서 사람이 한다**는 뜻이다.
+그래서 에이전트 판정은 리포트에 실린다.
+
+다만 **측정값과 판정은 절을 나눈다.** §1~§4 는 공식 API 로 잰 값이고 §5 는 언어모델의
+의견이다. 같은 표에 섞으면 회의에서 그 구분이 사라지고, 근거 없는 결론이 근거 있는
+숫자처럼 읽힌다.
+
+---
+
+## 1. 두 프로젝트
 
 | | 주가 모니터링 (`stock-monitor/`) | PIXEL TRADING FLOOR (`trading-floor/`) |
 |---|---|---|
@@ -15,59 +37,73 @@
 | 데이터 | KRX·DART **공식 API**, 인증키 필요 | 키 없는 공개 API (Binance·Yahoo·CoinGecko) |
 | 시간축 | **일별 종가** 원장 (SQLite) | 실시간~15분봉, 24시간 무기한 선물 |
 | 대상 | 상장 포트폴리오사 (KOSPI·KOSDAQ 전체) | 하이닉스·삼성전자·주요 코인 |
-| 산출물 | 단일 HTML 리포트 | 픽셀 오피스 웹앱 + 마크다운 리포트 |
-| **핵심 원칙** | **판단하지 않는다.** 등급·점수·권고를 내지 않는다 | **판정한다.** BUY/SELL/HOLD 를 낸다 |
+| 역할 | **사실을 잰다** — 측정값·가정·한계 | **판단한다** — 분석·토론·판정 |
+| 산출물 | 단일 HTML 리포트 (회의 자료) | 픽셀 오피스 웹앱 + 마크다운 리포트 |
 
-마지막 줄이 결정적이다. 한쪽은 "판단은 사람이 합니다"가 설계 원칙이고, 다른 쪽은
-판정을 내리는 것이 존재 이유다. 코드를 섞으면 둘 중 하나의 원칙이 깨진다.
-
-그래서 **합치지 않고 잇는다.** 원장은 측정값만 내보내고, 데스크는 그것을 재료로
-받아 판정한다. 판정의 책임은 데스크에 있고, 원장은 끝까지 판단하지 않는다.
+두 도구의 역할이 다르므로 코드를 섞지 않는다. 원장은 끝까지 재기만 하고, 판정은 끝까지
+데스크가 한다. 리포트는 둘을 **나란히** 싣는다.
 
 ---
 
-## 1. 배치
+## 2. 배치
 
 ```
 Stock-Agent/
 ├─ stock-monitor/     주가 모니터링 — 원본 그대로
-│   └─ ki_monitor.py  5,317줄 원본 + `facts` 명령 (파일 끝 '11. 통합 계층')
+│   └─ ki_monitor.py  원본 5,317줄 + 파일 끝 '11. 통합 계층'
+│                     · facts        관측 사실을 JSON 으로 내보낸다  (→ 데스크)
+│                     · 에이전트 절   브리핑을 읽어 리포트에 싣는다  (← 데스크)
 ├─ trading-floor/     PIXEL TRADING FLOOR — 원본 그대로
-│   └─ server/ki-bridge.js   통합 계층의 유일한 신규 모듈
-└─ docs/integration.md       이 문서
+│   └─ server/
+│       · ki-bridge.js      원장 실측값을 읽어 프롬프트에 넣는다   (← 원장)
+│       · export-brief.js   판정을 모아 브리핑 JSON 을 낸다        (→ 원장)
+│       · engine.js         런마다 사이드카 JSON 을 함께 저장한다
+└─ docs/integration.md      이 문서
 ```
 
 각 하위 프로젝트는 **단독으로 떼어내도 그대로 돈다.** 각자의 `README.md`·`CLAUDE.md`·
-`.gitignore`·테스트가 원본 그대로 남아 있다. 통합을 꺼도(기본값) 두 프로젝트의
-동작은 통합 이전과 같다.
+`.gitignore`·테스트가 원본 그대로 남아 있다.
 
 ---
 
-## 2. 데이터가 흐르는 방향 — 한 방향뿐이다
+## 3. 데이터가 흐르는 방향 — 두 방향, 그러나 원장은 한 방향
 
 ```
-  [stock-monitor]                              [trading-floor]
-  KRX Open API ─┐
-  DART Open API ─┼─▶ ki.sqlite ─▶ facts (JSON) ─▶ ki-bridge.js ─┐
-  FRED (선택) ──┘      원장         stdout          자식 프로세스 │
-                                                                 ▼
-                                                   market.ki ─▶ 프롬프트
-                                                                 │
-                                                                 ▼
-                                                  DIANA · GUARD · SAFE
-                                                                 │
-                                                                 ▼
-                                                    BULL⇄BEAR → ACE → PM
-                                                        판정 (BUY/SELL/HOLD)
+                    ① 사실 → 판단의 재료
+  ┌───────────────────────────────────────────────────────┐
+  │                                                       ▼
+[stock-monitor]                                    [trading-floor]
+ KRX·DART API                                       에이전트 13명
+      ↓                                                   │
+  ki.sqlite ──▶ facts (JSON) ──▶ ki-bridge.js ──▶ 프롬프트 │
+   원장                                          DIANA·GUARD·SAFE
+      │                                                   ▼
+      │                                             판정 (BUY/SELL/HOLD)
+      │                                                   │
+      │                                       engine.js 사이드카 (floor.run/1)
+      │                                                   │
+      │                                            export-brief.js
+      │                                                   │
+      ▼                                          agent-brief.json
+  HTML 리포트  ◀──────────────────────────────────────────┘
+   §1~§4 측정값                ② 판단 → 회의 자료
+   §5 에이전트 판정
 ```
 
-**역방향은 없다.** 데스크의 판정·포지션·성적표는 원장으로 돌아가지 않는다.
-원장은 공식 API 로 측정한 사실만 담는 장부이고, AI 판정은 사실이 아니다.
-그것을 섞으면 다음 리포트의 신뢰가 무너진다.
+### 원장(`ki.sqlite`)에는 절대 쓰지 않는다
+
+되돌아오는 것은 **리포트**이지 **원장**이 아니다. `ki.sqlite` 는 공식 API 로 측정한
+사실만 담는 장부다. AI 판정·가상 포지션·성적표를 여기에 쓰면 다음번 측정이 오염되고,
+그 오염은 되돌릴 수 없다.
+
+- 리포트(HTML 산출물) ← 에이전트 판정을 **별도 절로** 싣는다. ✔
+- 원장(SQLite) ← 에이전트 판정을 쓴다. ✘ 하지 않는다.
 
 ---
 
-## 3. Python 쪽 계약 — `ki_monitor.py facts`
+## 4. 방향 ① — 원장이 데스크에 사실을 준다
+
+### 4.1 Python 쪽 — `ki_monitor.py facts`
 
 ```bash
 python ki_monitor.py facts --code 000660
@@ -78,20 +114,16 @@ python ki_monitor.py facts --code 000660 --with-disclosures   # DART 공시까�
 
 - **stdout 은 JSON 만.** 진단 메시지는 전부 stderr 로 간다. 이게 깨지면 통합이 깨진다.
 - **네트워크를 쓰지 않는다** (기본값). 원장에 있는 것만 낸다.
-  `--with-disclosures` 를 줄 때만 DART 를 부른다.
 - 종료코드: 정상 `0`, 실패 `1`. **실패해도 stdout 에는 JSON 이 나간다**
   (`{"ok": false, "reason": "..."}`). 받는 쪽이 이유를 알아야 하기 때문이다.
-- 시장(`--market`)을 물어보지 않는다. 종목코드로 원장에 직접 물어 KOSPI/KOSDAQ 를 가른다.
+- 시장(`--market`)을 물어보지 않는다. 종목코드로 원장에 물어 KOSPI/KOSDAQ 를 가른다.
 
-### 스키마 `ki.facts/1`
+#### 스키마 `ki.facts/1`
 
 ```jsonc
 {
-  "ok": true,
-  "schema": "ki.facts/1",
-  "calc_version": "single-v1",
-  "generated_at": "2026-09-04T10:21:00",
-  "stage": "personal",
+  "ok": true, "schema": "ki.facts/1", "calc_version": "single-v1",
+  "generated_at": "2026-09-04T10:21:00", "stage": "personal",
 
   "units":       { "days_3pct": "영업일 (시총 3% 처분, 평균 거래량 기준)", ... },
   "assumptions": ["처분 소요일수 — 거래량의 10%만 소화한다고 가정합니다. ...", ...],
@@ -102,49 +134,40 @@ python ki_monitor.py facts --code 000660 --with-disclosures   # DART 공시까�
       "as_of": "2026-08-12",      // 원장의 마지막 영업일
       "stale_days": 23,           // 오늘로부터 며칠 지났는가
       "n_days": 243,              // 관측기간 — 분위(pctile)의 의미가 여기 달렸다
-      "n_stocks": 1885,
-      "benchmark": "코스피",       // 베타·트래킹에러의 잣대
-      "regime": {                 // 시장 국면 — 수준이 아니라 분위로 본다
-        "rate": { "label": "국고채 3년", "value": 3.799, "display": "3.799%",
-                  "pctile": 0.91, "chg20": -0.084, "what": "국채전문유통시장 지표물 종가수익률" }
-      },
-      "fs_companies": 1799
+      "n_stocks": 1885, "benchmark": "코스피", "fs_companies": 1799,
+      "regime": { "rate": { "label": "국고채 3년", "value": 3.799,
+                            "display": "3.799%", "pctile": 0.91, "chg20": -0.084,
+                            "what": "국채전문유통시장 지표물 종가수익률" } }
     }
   },
 
   "stocks": {
     "000660": {
-      "found": true,
-      "code": "000660", "name": "SK하이닉스", "market": "KOSPI", "sector": null,
-      "as_of": "2026-08-12", "stale_days": 23, "close": 1504000.0,
+      "found": true, "code": "000660", "name": "SK하이닉스", "market": "KOSPI",
+      "sector": null, "as_of": "2026-08-12", "stale_days": 23, "close": 1504000.0,
       "measures":     { "days_3pct": 37.27, "days_3pct_med": 42.17, "beta": null, ... },
       "observations": { "liq": [...], "px": [...], "cap": [...], "fin": [...], "events": [...] },
       "volume_profile": [{ "price": 1200000.0, "share": 0.08 }, ...]
     },
     "999999": { "found": false, "code": "999999", "reason": "원장에 이 종목의 시세가 없습니다" }
   },
-
   "missing": ["999999"]
 }
 ```
-
-### 이 스키마가 지키는 것
 
 | 규칙 | 왜 |
 |---|---|
 | 모르면 `null`. 0 으로 채우지 않는다 | 받는 쪽이 '측정 못 함'과 '0으로 측정됨'을 구분해야 한다 |
 | `units` 가 값과 함께 나간다 | 금융 데이터는 단위가 틀려도 계산이 돌아간다. 조용히 틀린다 |
-| `assumptions` 가 값과 함께 나간다 | 처분 소요일수는 참여율 가정 위에 서 있다. 숫자만 넘기면 가정이 사라진다 |
-| `stale_days` 가 항상 나간다 | 원장은 일별 종가다. 며칠 지난 값을 현재가로 읽으면 판정이 통째로 틀어진다 |
-| `found:false` 를 명시한다 | 없는 종목을 조용히 빼면 받는 쪽이 "조회했는데 값이 없다"와 구분 못 한다 |
-| 등급·점수·권고 키가 없다 | 원장은 판단하지 않는다. `selftest` 가 이 금칙을 검사한다 |
+| `assumptions` 가 값과 함께 나간다 | 처분 소요일수는 참여율 가정 위에 서 있다 |
+| `stale_days` 가 항상 나간다 | 일별 종가를 현재가로 읽으면 판정이 통째로 틀어진다 |
+| `found:false` 를 명시한다 | 조용히 빼면 "조회했는데 없다"와 구분이 안 된다 |
+| 등급·점수·권고 키가 없다 | 재는 쪽은 재기만 한다. 판정은 데스크의 몫이다 |
 
 `measures` 는 `units` 에 등재된 키만 나간다. 중간 계산 컬럼이 새어 나가면 받는 쪽이
 뜻 모르는 숫자를 근거로 쓴다.
 
----
-
-## 4. Node 쪽 계약 — `server/ki-bridge.js`
+### 4.2 Node 쪽 — `server/ki-bridge.js`
 
 ```js
 module.exports = { DEFAULT_KI, DEFAULT_SCRIPT, isEnabled, kiConfig, krCodeOf,
@@ -153,162 +176,258 @@ module.exports = { DEFAULT_KI, DEFAULT_SCRIPT, isEnabled, kiConfig, krCodeOf,
 
 | 함수 | 시그니처 | 설명 |
 |---|---|---|
-| `isEnabled(cfg?)` | `=> boolean` | `ki.enabled`. 꺼져 있으면 이 모듈은 아무것도 하지 않는다 |
+| `isEnabled(cfg?)` | `=> boolean` | `ki.enabled`. 꺼져 있으면 아무것도 하지 않는다 |
 | `kiConfig(cfg?)` | `=> object` | DEFAULTS 와 병합된 `ki` 설정 사본 |
-| `krCodeOf(x)` | `=> '000660'\|null` | `'000660'` · `'000660.KS'` → 코드. 그 외 `null` |
+| `krCodeOf(x)` | `=> '000660'\|null` | `'000660'` · `'000660.KS'` → 코드 |
 | `fetchKiFacts(code, {cfg}?)` | `=> Promise<facts\|null>` | 파이썬 스폰 → JSON. **절대 reject 하지 않는다** |
-| `formatKiLines(facts, code, {staleWarnDays}?)` | `=> string[]` | 프롬프트에 넣을 한국어 줄. 붙일 게 없으면 `[]` |
-| `clearCache()` | `=> void` | 캐시 비우기 |
-| `_setSpawn(fn)` | `=> void` | 테스트 주입구 |
+| `formatKiLines(facts, code, opts?)` | `=> string[]` | 프롬프트용 한국어 줄. 없으면 `[]` |
+| `clearCache()` / `_setSpawn(fn)` | | 캐시 비우기 / 테스트 주입구 |
 
-### 지키는 규칙
+- **외부 npm 의존성 0.** `node:child_process` · `fs` · `path` 만 쓴다.
+- **절대 throw 하지 않는다.** 실패는 `console.error` 한 줄 + `null`.
+- **성공도 실패도 캐시한다** (기본 30분 / 실패 1분).
+- **`python3` → `python` 순서로 찾는다.** `ki.python` 을 지정하면 그것을 먼저.
+- 측정값을 등급·점수로 바꾸지 않는다. `formatKiLines` 의 마지막 줄이 이것을 명시한다.
 
-- **외부 npm 의존성 0.** `node:child_process` · `node:fs` · `node:path` 만 쓴다.
-  파이썬을 자식 프로세스로 부르는 것은 의존성 추가가 아니다 — 사용자가 끄면(기본값)
-  이 모듈은 아무것도 하지 않고, 파이썬이 없어도 앱은 그대로 돈다.
-- **절대 throw 하지 않는다.** 분석 파이프라인·감시 루프를 이 모듈이 막으면 안 된다.
-  실패는 `console.error` 한 줄 + `null` 반환.
-- **성공도 실패도 캐시한다** (기본 30분 / 실패 1분). 분석 한 번에 여러 에이전트가
-  같은 값을 본다. 캐시가 없으면 파이썬을 그만큼 스폰한다.
-- **`python3` → `python` 순서로 찾는다.** `ki.python` 을 지정하면 그것을 먼저 쓴다.
-- **판단을 실어 나르지 않는다.** 받은 측정값을 측정값인 채로 옮긴다.
-  `formatKiLines` 의 마지막 줄이 이것을 명시한다:
-  *"위 값은 공식 API 로 측정한 사실이다. 등급·점수·권고가 아니다."*
-
-### 설정 (`config.json` 의 `ki` 블록)
+### 4.3 설정 (`config.json` 의 `ki` 블록)
 
 ```jsonc
 {
   "ki": {
-    "enabled": false,          // 기본 꺼짐 — 켜기 전까지 통합 이전과 동작이 같다
-    "python": "",              // 비우면 python3 → python
-    "script": "",              // 비우면 <저장소>/stock-monitor/ki_monitor.py
-    "timeoutSec": 30,
-    "cacheMin": 30,
-    "withDisclosures": false,  // 켜면 DART 공시까지 (네트워크·DART 키 필요)
-    "staleWarnDays": 5,        // 원장이 이만큼 묵으면 프롬프트에 경고를 붙인다
+    "enabled": false,          // 기본 꺼짐
+    "python": "", "script": "",
+    "timeoutSec": 30, "cacheMin": 30,
+    "withDisclosures": false,  // 켜면 DART 공시까지 (네트워크·키 필요)
+    "staleWarnDays": 5,        // 원장이 이만큼 묵으면 프롬프트에 경고
     "injectInto": ["diana", "guard", "safe"]
   }
 }
 ```
 
-`config.json` 은 git 이 추적하지 않는다 (`.gitignore`).
 `server/config.js` 의 `DEFAULTS.ki` 와 `ki-bridge.js` 의 `DEFAULT_KI` 는 **키가 같아야 한다** —
-한쪽에만 키가 생기면 설정이 조용히 무시된다. 테스트가 이것을 검사한다.
+한쪽에만 키가 생기면 설정이 조용히 무시된다. 테스트가 검사한다.
 
 ---
 
-## 5. 기존 모듈에 붙은 것 — 전부 더하기만 했다
+## 5. 방향 ② — 데스크가 원장 리포트에 판정을 준다
+
+### 5.1 사이드카 — `floor.run/1`
+
+엔진이 런마다 마크다운 옆에 같은 이름의 `.json` 을 쓴다.
+
+```
+reports/2026-09-04-SKHYNIX-1030.md      사람이 읽는 것
+reports/2026-09-04-SKHYNIX-1030.json    기계가 읽는 것 (floor.run/1)
+```
+
+마크다운을 되파싱하지 않는다 — 서식이 조금만 바뀌어도 조용히 깨진다. 같은 재료로
+JSON 을 한 벌 더 쓸 뿐이고, 여기서 새로 계산하거나 요약하지 않는다.
+
+```jsonc
+{
+  "schema": "floor.run/1", "ts": "2026-09-04T01:30:00.000Z",
+  "symbol": "SKHYNIX", "display": "SKHYNIX", "kind": "krstock",
+  "nameKo": "SK하이닉스",
+  "krCode": "000660",          // 워치리스트와 조인하는 키. 한국 주식이 아니면 null
+  "mode": "algo", "mock": false,
+  "reportFile": "2026-09-04-SKHYNIX-1030.md",
+  "priceLine": "...", "perpPriceLine": "...",
+  "kiAsOf": "2026-08-12",      // 이 판단이 참고한 원장 기준일
+
+  "decision": {
+    "action": "BUY", "confidence": 64,
+    "entry": "1,480,000원", "stop": "1,400,000원", "target": "1,700,000원",
+    "rationale": "...", "verdict": "APPROVE", "sizing": "계좌 대비 2%",
+    "riskDowngraded": false, "scalp": null,
+    "risk": { "rr": 2.75, "ok": true, "minRR": 1.5, "reasons": [] }
+  },
+  "analysts":      [{ "id": "diana", "name": "DIANA", "bubble": "...", "report": "..." }],
+  "debate":        [{ "turn": 1, "id": "bull", "name": "BULL", "bubble": "...", "report": "..." }],
+  "scalpDesk":     [...], "riskCommittee": [...],
+  "pm":            { "failed": false, "verdict": "APPROVE", "sizing": "...", "rationale": "...", ... },
+  "memory":        ["직전 판정(2026-08-20 BUY) 이후 -3.1%"],
+  "disclaimer":    "본 판정은 AI 시뮬레이션 결과이며 투자 조언이 아닙니다. ..."
+}
+```
+
+없는 값은 `null` 이다. 확신도 없음이 `0` 으로 둔갑하면 성적표 집계까지 틀어진다.
+
+### 5.2 브리핑 — `server/export-brief.js` → `agent.brief/1`
+
+```bash
+node server/export-brief.js --run --symbols SKHYNIX,SAMSUNG --mode algo
+node server/export-brief.js                    # 기존 리포트만 모은다 (분석 안 함)
+node server/export-brief.js --run --demo       # claude 없이 목업으로 (연결 시험)
+node server/export-brief.js --max-age-hours 24 # 하루 지난 분석은 뺀다
+```
+
+| 옵션 | 뜻 |
+|---|---|
+| `--run` | **실제로 분석을 실행한다.** 없으면 저장된 리포트를 모으기만 한다 |
+| `--symbols A,B` | 대상. 없으면 `config.json` 의 `watchlist` |
+| `--mode algo\|scalp\|attack` | `--run` 일 때의 파이프라인 |
+| `--demo` | `--run` 과 함께 — 목업 응답 (claude 불필요) |
+| `--out <경로>` | 기본 `reports/agent-brief.json` |
+| `--max-age-hours N` | 수집 시 N시간보다 오래된 건 제외 |
+
+**`--run` 없이는 절대 분석을 돌리지 않는다.** 실전 런은 에이전트 13명 × claude opus 라
+비용이 크다. 실수로 돌아가면 안 된다.
+
+`stdout` 은 **사람용 진행 상황**이고 결과는 파일로 쓴다 — `facts` 와 반대다.
+방향이 다르기 때문이다. 여기서는 몇 분씩 걸리는 진행을 사람이 봐야 한다.
+
+```jsonc
+{
+  "schema": "agent.brief/1",
+  "generated_at": "2026-09-04T01:58:00.000Z",
+  "source": "PIXEL TRADING FLOOR",
+  "mode": "algo",
+  "executed": true,            // 이번에 돌렸는가, 저장된 것을 모았을 뿐인가
+  "disclaimer": "본 브리핑은 AI 에이전트의 분석·토론 결과이며 투자 조언이 아닙니다. ...",
+  "runs": { "000660": <floor.run/1>, "BTC": <floor.run/1> },   // 키: KRX 코드 ?? 표시명
+  "by_code": ["000660", "005930"],   // 한국 상장 — 워치리스트와 조인 가능
+  "others":  ["BTC"],                // 그 외
+  "errors":  [{ "symbol": "SAMSUNG", "message": "Yahoo chart HTTP 403" }]
+}
+```
+
+실패한 종목은 `errors` 에 이유가 남는다. 조용히 빠지지 않는다.
+
+### 5.3 리포트에 싣기 — `ki_monitor.py report --with-agents`
+
+```bash
+python ki_monitor.py report --with-agents
+python ki_monitor.py report --with-agents --brief ../trading-floor/reports/agent-brief.json
+python ki_monitor.py daily  --with-agents        # 적재 → 리포트 한 번에
+```
+
+기본 경로는 `../trading-floor/reports/agent-brief.json` 이다.
+
+| Python 쪽 | 설명 |
+|---|---|
+| `agent_brief_load(path=None)` | 브리핑을 읽는다. 없거나 깨졌으면 `None` — **예외를 올리지 않는다** |
+| `render_agents_block(brief, codes=None)` | 절 본문 HTML. `codes` 순서를 우선한다 |
+| `ctx["agents_enabled"]` / `ctx["agents"]` | 렌더러가 보는 스위치와 데이터 |
+
+리포트에서 이 절이 지키는 것:
+
+1. **측정값과 판정을 섞지 않는다.** 별도의 절이고, 머리에 "AI 에이전트의 판정입니다 —
+   위 절들의 측정값과 성격이 다릅니다" 배너가 붙는다.
+2. **판정을 요약하거나 재해석하지 않는다.** 에이전트가 쓴 문장을 그대로 옮긴다.
+   애널리스트 리포트·토론 로그·리스크 위원회 의견이 접이식으로 전문 그대로 실린다.
+3. **언제 분석한 것인지 밝힌다.** 분석 시각, `executed`(새로 돌렸는지 모은 것인지),
+   참고한 원장 기준일(`kiAsOf`), 데모 런이면 그 사실까지.
+4. **강등을 숨기지 않는다.** 리스크 게이트가 판정을 강등했으면 그 사실과 사유를 함께 싣는다.
+5. **에이전트 출력을 HTML 이스케이프한다.** 언어모델이 만든 문자열이 그대로 들어가면
+   리포트가 깨지거나 스크립트가 실행된다. `selftest` 가 이것을 검사한다.
+6. **없으면 없다고 적는다.** 브리핑이 없으면 만드는 방법을 안내한다.
+
+### 5.4 절 번호
+
+`--with-agents` 를 주면 목차가 이렇게 된다.
+
+```
+1 무엇을 결정해야 하는가   2 팔 수 있는가      3 어떻게 팔 것인가
+4 지금이 그 때인가         5 에이전트 분석 ←   6 종목별 상세
+7 밸류에이션               8 시장 배경         9 출처
+```
+
+주지 않으면 원래의 1~8 그대로다. **에이전트 절을 끄면 생성되는 HTML 이 통합 이전
+원본 코드의 출력과 바이트 단위로 같다** — 이것이 회귀가 없다는 증거다.
+
+---
+
+## 6. 기존 모듈에 붙은 것 — 전부 더하기만 했다
 
 | 파일 | 변경 | 내용 |
 |---|---|---|
-| `server/config.js` | +12 | `DEFAULTS.ki` 블록 |
-| `server/market.js` | +13/−3 | `krstock` 경로의 `Promise.allSettled` 에 원장 조회 한 줄. 반환에 `krCode`·`ki` |
-| `server/agents.js` | +40 | `kiLines()` 헬퍼 + DIANA 프롬프트·공통 푸터 주입 지점 |
-| `server/server.js` | +68 | `GET /api/ki` 라우트 하나 |
+| `stock-monitor/ki_monitor.py` | +약 700 / −0 | 파일 끝 '11. 통합 계층' 섹션 · 서브커맨드 · 자리표시자 |
+| `trading-floor/server/config.js` | +12 / −0 | `DEFAULTS.ki` 블록 |
+| `trading-floor/server/market.js` | +13 / −3 | `krstock` 경로에 원장 조회 한 줄, 반환에 `krCode`·`ki` |
+| `trading-floor/server/agents.js` | +40 / −0 | `kiLines()` 헬퍼 + 프롬프트 주입 지점 |
+| `trading-floor/server/server.js` | +68 / −0 | `GET /api/ki` 라우트 |
+| `trading-floor/server/engine.js` | +약 90 / −0 | `_runRecord()` + 사이드카 저장 |
 
-기존 SSE 이벤트·모드·리포트 형식은 **하나도 바뀌지 않았다.**
-
-### `market.ki`
-
-`kind === 'krstock'` 이고 `ki.enabled` 일 때만 존재한다. 그 외에는 키 자체가 없다.
-`market.krCode` 가 함께 실려 프롬프트 빌더가 어느 종목의 실측인지 알 수 있다.
-
-원장 조회는 네트워크가 아니라 로컬 파이썬 스폰이므로 기존 `allSettled` 배열에 넣었다.
-실패해도 나머지 수집은 그대로 진행된다 (기존 best-effort 정책과 같다).
-
-### 프롬프트 주입
-
-`ki.injectInto` 에 있는 에이전트에게만 붙는다 (기본 `diana`·`guard`·`safe`).
-
-- **DIANA(기본적 분석)** — `[기본적 데이터]` 바로 뒤, 지시문 **앞**에 붙는다.
-  지시문이 "위 기본적 데이터를 근거로"라고 말하므로 데이터가 먼저 와야 한다.
-- **GUARD·SAFE(리스크)** — 공통 푸터에 붙는다. 처분 소요일수·유동성 집중도는
-  청산 위험과 다른 축의 리스크이고, 그 둘이 보는 것이 그것이다.
-- **TARO·NOVA·VIBE·BULL·BEAR·ACE·PM** — 기본값에서는 붙지 않는다.
-  ACE 는 애널리스트 리포트를 통해 간접적으로 받는다.
-
-### `GET /api/ki?symbol=…`
-
-| 상황 | 응답 |
-|---|---|
-| 모듈 없음 | `503 {error}` |
-| `ki.enabled=false` | `200 {enabled:false, note}` — 파이썬을 스폰하지 않는다 |
-| `symbol` 없음 | `400 {error}` |
-| 한국 상장 종목 아님 | `200 {enabled:true, found:false, note, supported}` |
-| 조회 실패 | `200 {enabled:true, found:false, code, note}` |
-| 정상 | `200 {enabled:true, found:true, code, lines, facts}` |
-
-`symbol` 은 `SKHYNIX` 같은 별칭도, `000660` 코드도 받는다.
+기존 SSE 이벤트·모드·리포트(.md) 형식·`decisions.json` 은 **하나도 바뀌지 않았다.**
 
 ---
 
-## 6. 켜는 법
+## 7. 한 번에 돌리기
 
 ```bash
-# 1) 원장을 만든다 (stock-monitor)
+# 0) 원장 준비 (하루 한 번, 자동화)
 cd stock-monitor
-cp .env.example .env          # KRX_API_KEY · DART_API_KEY 를 채운다
-python ki_monitor.py check-auth
-python ki_monitor.py ingest --from 20250101 --universe KOSPI
-python ki_monitor.py fundamentals --market KOSPI
-python ki_monitor.py facts --code 000660 --indent 2    # 여기까지 되면 원장은 준비됨
+python ki_monitor.py daily --market KOSPI
 
-# 2) 데스크에서 켠다 (trading-floor)
+# 1) 에이전트 분석 (회의 전, 수 분/종목)
 cd ../trading-floor
-cat > config.json <<'JSON'
-{ "ki": { "enabled": true } }
-JSON
-node server/server.js
-curl "http://localhost:8000/api/ki?symbol=SKHYNIX"
+echo '{ "ki": { "enabled": true } }' > config.json     # 원장 실측을 프롬프트에 넣는다
+node server/export-brief.js --run --symbols SKHYNIX,SAMSUNG --mode algo
+
+# 2) 회의 자료 생성
+cd ../stock-monitor
+python ki_monitor.py report --market KOSPI --with-agents
+#   → out/KI_exit_YYYYMMDD.html  (측정값 §1~§4 + 에이전트 판정 §5)
 ```
 
-원장이 없거나 파이썬이 없어도 데스크는 그대로 돈다. 실측만 빠진다.
+어느 단계가 실패해도 앞 단계의 산출물은 살아 있다. 에이전트 분석이 없으면 리포트는
+"에이전트 분석이 없습니다"라고 적고 나머지 절을 그대로 낸다.
 
 ---
 
-## 7. 검증
+## 8. 검증
 
 ```bash
-cd stock-monitor && python ki_monitor.py selftest    # 71개 (기존 64 + facts 7)
-cd trading-floor && npm test                          # 89개 (기존 68 + 브리지 21)
+cd stock-monitor  && python ki_monitor.py selftest    # 80개 (기존 64 + 통합 16)
+cd trading-floor  && npm test                          # 104개 (기존 68 + 통합 36)
 ```
 
 통합이 지키기로 한 것 중 **테스트가 실제로 강제하는 것**:
 
 | 검사 | 어디 |
 |---|---|
-| 결측은 `null` 로 나간다 (0 으로 채우지 않는다) | `selftest` |
+| 결측은 `null` 로 나간다 (0 으로 채우지 않는다) | `selftest` · `export-brief.test.mjs` |
 | `units` 에 없는 컬럼은 내보내지 않는다 | `selftest` |
-| 내보내는 키에 등급·점수·권고가 없다 | `selftest` |
+| `facts` 가 등급·점수·권고를 내보내지 않는다 | `selftest` |
 | 원장 → JSON 왕복에 `NaN`·`Infinity` 가 없다 | `selftest` |
+| 브리핑이 없거나 깨져도 리포트 생성을 막지 않는다 | `selftest` |
+| **에이전트 출력을 HTML 이스케이프한다** | `selftest` |
+| 강등된 판정은 강등 사실과 사유를 함께 싣는다 | `selftest` |
+| 레벨이 없으면 지어내지 않는다 | `selftest` |
 | 꺼져 있으면 파이썬을 스폰하지 않는다 | `ki-bridge.test.mjs` |
 | 파이썬이 없어도·시간을 넘겨도 앱을 막지 않는다 | `ki-bridge.test.mjs` |
 | `DEFAULTS.ki` 와 `DEFAULT_KI` 의 키가 같다 | `ki-bridge.test.mjs` |
 | 원장이 묵으면 "현재가가 아니다" 경고가 붙는다 | `ki-bridge.test.mjs` |
 | 실측 블록에 매수·매도·권고·목표주가가 없다 | `ki-bridge.test.mjs` |
-| 요청한 코드와 다른 종목의 값을 섞지 않는다 | `ki-bridge.test.mjs` |
-| 값이 없으면 줄 자체를 만들지 않는다 | `ki-bridge.test.mjs` |
+| 사이드카가 조인 키(`krCode`)와 `kiAsOf` 를 담는다 | `export-brief.test.mjs` |
+| 종목별 최신 판정만 모은다 | `export-brief.test.mjs` |
+| 장부·성적표·자기 출력물을 런으로 오해하지 않는다 | `export-brief.test.mjs` |
+| `--run` 없이는 분석을 실행하지 않는다 | `export-brief.test.mjs` |
+
+추가로 **에이전트 절을 끈 리포트가 통합 이전 원본 출력과 바이트 단위로 같은지**를
+회귀 확인에 쓴다 (원본 `ki_monitor.py` 로 같은 원장을 렌더해 비교).
 
 ---
 
-## 8. 넣지 않기로 한 것
+## 9. 넣지 않기로 한 것
 
 - **실주문 연동.** 두 프로젝트 모두 원래 없고, 앞으로도 넣지 않는다.
-- **역방향 기록.** AI 판정을 원장에 쓰지 않는다 (§2).
-- **npm 패키지.** 브리지는 Node 내장만 쓴다.
-- **원장의 자동 갱신.** 브리지는 원장을 읽기만 한다. `ingest` 는 사람이 돌린다.
+- **원장(`ki.sqlite`)에 AI 판정 쓰기.** 리포트에는 싣고 원장에는 쓰지 않는다 (§3).
+- **npm 패키지.** 브리지·내보내기 모두 Node 내장만 쓴다.
+- **원장의 자동 갱신.** 브리지는 원장을 읽기만 한다. `ingest` 는 사람이 돌린다 —
   분석 요청이 KRX API 호출을 유발하면 할당량이 조용히 소진된다.
+- **분석의 자동 실행.** `--run` 없이는 에이전트를 돌리지 않는다.
 - **대외비 데이터의 저장소 반입.** `watchlist.csv`·`exit_plan.csv`·`positions.csv`·
-  `ki.sqlite`·`.env` 는 `.gitignore` 에 있다. 이건 저작권이 아니라 영업비밀·
-  미공개중요정보 문제다.
+  `ki.sqlite`·`.env`·`config.json` 은 `.gitignore` 에 있다. 저작권이 아니라
+  영업비밀·미공개중요정보 문제다.
 
 ---
 
-## 9. 면책
+## 10. 면책
 
-`trading-floor` 는 **AI 시뮬레이션**이며 투자 조언이 아니다. 실제 주문·거래·자금
+`trading-floor` 의 판정은 **AI 시뮬레이션**이며 투자 조언이 아니다. 실제 주문·거래·자금
 이동은 발생하지 않는다.
 
-`stock-monitor` 가 만드는 리포트는 **대외비 문서**이고 투자권유·투자자문 자료가
-아니다. 원장 실측값이 데스크 프롬프트로 흘러가도 그 성격은 바뀌지 않는다.
+`stock-monitor` 가 만드는 리포트는 **대외비 문서**이고 투자권유·투자자문 자료가 아니다.
+에이전트 판정이 그 리포트에 실려도 성격은 바뀌지 않는다 — 회의에서 사람이 읽고
+결정하기 위한 자료다.

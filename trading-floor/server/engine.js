@@ -960,6 +960,25 @@ class Engine extends EventEmitter {
     );
     await fsp.writeFile(fullPath, md, 'utf8');
 
+    // 기계판독용 사이드카 — 같은 이름의 .json (계약: ../docs/integration.md, floor.run/1)
+    //
+    // 마크다운은 사람이 읽는 것이다. 주가 모니터링 리포트(HTML)에 이 런을 실으려면
+    // 구조화된 값이 필요한데, 마크다운을 되파싱하는 방식은 서식이 조금만 바뀌어도
+    // 조용히 깨진다. 그래서 같은 재료로 JSON 을 한 벌 더 쓴다.
+    //
+    // .md 는 이미 저장됐다. 사이드카가 실패해도 런을 깨지 않는다.
+    try {
+      const record = this._runRecord(resolved, market, mock, mode, fname, analystResults,
+        debateLog, scalpResults, riskResults, pmResult, memory, decision, now);
+      await fsp.writeFile(
+        fullPath.replace(/\.md$/, '.json'),
+        JSON.stringify(record, null, 2),
+        'utf8'
+      );
+    } catch (e) {
+      console.error('[engine] 사이드카 JSON 저장 실패:', e && e.message ? e.message : e);
+    }
+
     // decisions.json append
     const decPath = path.join(REPORTS_DIR, 'decisions.json');
     let arr = [];
@@ -988,6 +1007,79 @@ class Engine extends EventEmitter {
     await fsp.writeFile(decPath, JSON.stringify(arr, null, 2), 'utf8');
 
     return `reports/${fname}`;
+  }
+
+  // 런 한 건을 기계가 읽을 수 있는 모양으로 만든다 (floor.run/1).
+  //
+  // 원칙 — 마크다운과 같은 재료만 쓴다. 여기서 새로 계산하거나 요약하지 않는다.
+  // 없는 값은 null 이다. 빈 문자열이나 0 으로 위장하지 않는다.
+  _runRecord(resolved, market, mock, mode, fname, analystResults, debateLog,
+             scalpResults, riskResults, pmResult, memory, decision, now) {
+    const cast = (r) => ({
+      id: r.id || null,
+      name: r.name || null,
+      bubble: r.bubble || null,
+      report: r.report || null,
+    });
+
+    // 이 런이 참고한 주가 모니터링 원장의 기준일 (있을 때만).
+    // 리포트에 "언제 시점의 실측을 보고 판단했는가"를 남기기 위한 것이다.
+    let kiAsOf = null;
+    try {
+      const code = market && market.krCode;
+      const s = code && market.ki && market.ki.stocks ? market.ki.stocks[code] : null;
+      if (s && s.as_of) kiAsOf = s.as_of;
+    } catch (_) {
+      kiAsOf = null;
+    }
+
+    const d = decision || {};
+    return {
+      schema: 'floor.run/1',
+      ts: now.toISOString(),
+      symbol: resolved.symbol,
+      display: resolved.display,
+      kind: resolved.kind,
+      nameKo: resolved.nameKo || null,
+      // KRX 6자리 — 주가 모니터링 워치리스트와 조인하는 키다. 한국 주식이 아니면 null.
+      krCode: (market && market.krCode) || null,
+      mode,
+      mock,
+      reportFile: fname,
+      priceLine: (market && market.priceLine) || null,
+      perpPriceLine: (market && market.perp && market.perp.priceLine) || null,
+      kiAsOf,
+      decision: {
+        action: d.action || null,
+        confidence: typeof d.confidence === 'number' ? d.confidence : null,
+        entry: d.entry != null ? d.entry : null,
+        stop: d.stop != null ? d.stop : null,
+        target: d.target != null ? d.target : null,
+        rationale: d.rationale || null,
+        verdict: d.verdict || null,
+        sizing: d.sizing || null,
+        riskDowngraded: !!d.riskDowngraded,
+        scalp: d.scalp || null,
+        risk: d.risk || null,
+      },
+      analysts: (analystResults || []).map(cast),
+      debate: (debateLog || []).map((x) => ({ turn: x.turn == null ? null : x.turn, ...cast(x) })),
+      scalpDesk: (scalpResults || []).map(cast),
+      riskCommittee: (riskResults || []).map(cast),
+      pm: pmResult
+        ? {
+            failed: !!pmResult.failed,
+            verdict: pmResult.verdict || null,
+            sizing: pmResult.sizing || null,
+            rationale: pmResult.rationale || null,
+            bubble: pmResult.bubble || null,
+            report: pmResult.report || null,
+          }
+        : null,
+      memory: Array.isArray(memory) ? memory.slice() : [],
+      disclaimer:
+        '본 판정은 AI 시뮬레이션 결과이며 투자 조언이 아닙니다. 실제 주문은 이뤄지지 않습니다.',
+    };
   }
 
   _renderMarkdown(resolved, market, mock, mode, analystResults, debateLog, scalpResults, riskResults, pmResult, memory, decision, now) {

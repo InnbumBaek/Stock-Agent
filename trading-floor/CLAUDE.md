@@ -11,7 +11,7 @@ AI 에이전트들이 시장 데이터를 분석하고 토론해 매매 판정�
 node server/server.js          # http://localhost:8000
 # 포트 충돌 시: PORT=8123 node server/server.js
 # Windows: start-floor.cmd 더블클릭
-npm test                       # 89개 단위 테스트
+npm test                       # 104개 단위 테스트
 ```
 
 의존성 설치 불필요 — `package.json`에 dependencies가 없고 Node 내장 모듈만 쓴다.
@@ -32,9 +32,10 @@ server/
   indicators.js   SMA/RSI/MACD/ATR/변동성
   session-prep.js CLI — 수집 결과를 압축 JSON으로 stdout에 출력
   ki-bridge.js    ../stock-monitor 원장(KRX·DART)의 실측값 조회 — 기본 꺼짐
+  export-brief.js 판정을 모아 주가 모니터링 리포트용 브리핑 JSON 생성 (CLI)
 public/           단일 페이지 프론트 (캔버스 스프라이트 + DOM, 빌드 도구 없음)
 .claude/commands/floor.md   /floor 슬래시 커맨드
-reports/          런마다 마크다운 리포트 + decisions.json 누적
+reports/          런마다 마크다운 리포트 + 같은 이름의 .json(기계판독) + decisions.json 누적
 ```
 
 ## 에이전트와 모드
@@ -100,6 +101,26 @@ SK하이닉스·삼성전자는 **USDT 결제 무기한 선물**이 여러 거�
   바꾸지 마라. 판정은 이쪽 에이전트가 한다
 - 브리지는 원장을 **읽기만** 한다. 분석 요청이 KRX API 호출을 유발하면 할당량이
   조용히 소진된다. `ingest` 는 사람이 돌린다
+
+### 판정을 리포트로 내보내기
+
+에이전트 판정은 회의 자료가 된다. `server/export-brief.js` 가 런 결과를 모아
+`agent-brief.json` 을 만들고, 주가 모니터링이 그것을 HTML 리포트의 한 절로 싣는다.
+
+```bash
+node server/export-brief.js --run --symbols SKHYNIX,SAMSUNG   # 분석하고 내보낸다
+node server/export-brief.js                                    # 저장된 것만 모은다
+cd ../stock-monitor && python ki_monitor.py report --with-agents
+```
+
+- 엔진은 런마다 `.md` 옆에 같은 이름의 `.json`(floor.run/1)을 쓴다. 마크다운을
+  되파싱하는 방식은 서식이 조금만 바뀌어도 조용히 깨지기 때문이다.
+  **사이드카에는 마크다운과 같은 재료만 담는다.** 여기서 새로 계산하거나 요약하면
+  두 리포트가 어긋난다.
+- **`--run` 없이는 분석을 실행하지 않는다.** 13명 × claude opus 는 비용이 크다.
+- 없는 값은 `null` 이다. 확신도 없음이 `0` 으로 둔갑하면 성적표 집계까지 틀어진다.
+- 리포트에 실리는 문장은 언어모델이 만든 것이다. 받는 쪽(파이썬)이 이스케이프하지만,
+  이쪽에서도 제어문자·거대 문자열을 그대로 흘려보내지 않는지 살펴라.
 
 계약은 `../docs/integration.md` 가 단일 진실 소스다.
 

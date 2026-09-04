@@ -2463,19 +2463,14 @@ ul.p li {{ color:#1F5FA8; }} ul.c li {{ color:#B02A37; }}
 <div class="conf">대외비 · 사내 검토용 · 외부 배포 및 재배포 금지<br>
 <span>본 문서는 투자권유 또는 투자자문 자료가 아닙니다. 포트폴리오 보유사 실명과
 회수 계획이 포함되어 있으므로 열람 범위를 제한하십시오.</span></div>
-<nav>
- <a href="#s1">1 무엇을 결정해야 하는가</a><a href="#s2">2 팔 수 있는가</a>
- <a href="#s3">3 어떻게 팔 것인가</a><a href="#s4">4 지금이 그 때인가</a>
- <a href="#s5">5 종목별 상세</a><a href="#s6">6 밸류에이션</a>
- <a href="#s7">7 시장 배경</a><a href="#s8">8 출처</a>
-</nav>
+<nav>{nav_html}</nav>
 <h1>포트폴리오 회수 판단 리포트</h1>
 <div class='sub'>{org} · 상장 포트폴리오사 회수 시점 판단용</div>
 <div class="sub">기준일 {as_of} · {market} 전종목 {n_stocks:,}개 · 관측 {n_days}일 · 생성 {gen_at}</div>
 {watermark_html}
 <div class="flow">읽는 순서 —
  <b>무엇을 결정해야 하는가</b> → <b>팔 수 있는가</b> → <b>어떻게 팔 것인가</b> →
- <b>지금이 그 때인가</b> → 종목별 상세 → 배경</div>
+ <b>지금이 그 때인가</b>{agent_flow} → 종목별 상세 → 배경</div>
 
 <h2 id="s1">무엇을 결정해야 하는가 — 회수계획 대비 진척</h2>
 <div class="lead">경영계획의 회수 대상과, 데이터가 말하는 현재 상태를 나란히 놓습니다.
@@ -2508,7 +2503,7 @@ ul.p li {{ color:#1F5FA8; }} ul.c li {{ color:#B02A37; }}
    제외했습니다.</div></div>
 </div>
 
-<h2 id="s5">종목별 상세 — 관측값 전부</h2>
+{agent_block}<h2 id="s5">종목별 상세 — 관측값 전부</h2>
 <div class="lead">위 세 장의 근거가 되는 종목별 원자료입니다.
  유동성 · 주가 · 상장/보호예수 · 재무 네 갈래로 나눠 실었습니다.</div>
 {exit_detail_block}
@@ -3359,8 +3354,37 @@ def render_quant(ctx: dict, refresh_sec: int = 0) -> Path:
         "<b>본 문서는 내부 검토용이며 투자권유·투자자문 자료가 아닙니다.</b>"
         "</div>")
 
+    # ── 에이전트 분석 절 (통합 계층) ──────────────────────────────────
+    # ctx["agents_enabled"] 가 켜졌을 때만 절을 만듭니다. 끄면 목차·본문 모두
+    # 통합 이전과 동일합니다 — 번호도 밀리지 않습니다.
+    agents_on = bool(ctx.get("agents_enabled"))
+    secs = [("s1", "무엇을 결정해야 하는가"), ("s2", "팔 수 있는가"),
+            ("s3", "어떻게 팔 것인가"), ("s4", "지금이 그 때인가")]
+    if agents_on:
+        secs.append(("sa", "에이전트 분석"))
+    secs += [("s5", "종목별 상세"), ("s6", "밸류에이션"),
+             ("s7", "시장 배경"), ("s8", "출처")]
+    _links = [f'<a href="#{sid}">{i} {title}</a>'
+              for i, (sid, title) in enumerate(secs, 1)]
+    nav_html = "\n" + "".join(
+        " " + "".join(_links[i:i + 2]) + "\n" for i in range(0, len(_links), 2))
+
+    agent_block, agent_flow = "", ""
+    if agents_on:
+        ex_tbl = ctx.get("exit")
+        wl_codes = (list(ex_tbl.index)
+                    if isinstance(ex_tbl, pd.DataFrame) and not ex_tbl.empty else [])
+        agent_block = (
+            '<h2 id="sa">에이전트 분석 — AI 판정</h2>'
+            "<div class='lead'>PIXEL TRADING FLOOR 의 에이전트들이 위 측정값과 시장 데이터를 "
+            "보고 토론해 내린 판정입니다. 측정값이 아니라 의견이므로 절을 나눠 실었습니다. "
+            "회의에서 논점을 정리하는 데 쓰고, 근거는 §1~§4 로 돌아가 확인하십시오.</div>"
+            + render_agents_block(ctx.get("agents"), wl_codes) + "\n\n")
+        agent_flow = " → <b>에이전트 판정</b>"
+
     html = QUANT_TEMPLATE.format(
         org=ORG_NAME,
+        nav_html=nav_html, agent_block=agent_block, agent_flow=agent_flow,
         as_of=ctx["as_of"], market=ctx["market"], n_stocks=ctx["n_stocks"],
         n_days=n, gen_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         refresh_meta=(f"<meta http-equiv='refresh' content='{refresh_sec}'>"
@@ -4867,6 +4891,120 @@ def selftest() -> int:
         _assert(not (banned & set(_facts_measures(row))))
     check("facts 는 판단(등급·점수·권고)을 내보내지 않는다", _facts_no_verdict)
 
+    # 통합 계층 (2) — 에이전트 판정을 리포트에 실을 때
+    def _brief_fixture():
+        return {
+            "schema": AGENT_BRIEF_SCHEMA,
+            "generated_at": "2026-09-04T01:58:00Z",
+            "source": "PIXEL TRADING FLOOR",
+            "executed": False,
+            "disclaimer": "AI 시뮬레이션이며 투자 조언이 아닙니다.",
+            "runs": {
+                "000660": {
+                    "schema": "floor.run/1", "ts": "2026-09-04T01:30:00Z",
+                    "display": "SKHYNIX", "nameKo": "SK하이닉스", "krCode": "000660",
+                    "mode": "algo", "mock": False, "kiAsOf": "2026-08-12",
+                    "priceLine": "SK하이닉스 1,504,000원",
+                    "decision": {"action": "BUY", "confidence": 64,
+                                 "entry": "1,480,000원", "stop": "1,400,000원",
+                                 "target": "1,700,000원",
+                                 "rationale": "VWAP 대비 할인 구간이나 처분에 시간이 걸린다",
+                                 "verdict": "APPROVE", "sizing": "계좌 대비 2%",
+                                 "riskDowngraded": False,
+                                 "risk": {"rr": 2.75, "ok": True, "minRR": 1.5,
+                                          "reasons": []}},
+                    "analysts": [{"id": "diana", "name": "DIANA",
+                                  "bubble": "처분 소요일수가 길다",
+                                  "report": "시총 3% 처분에 평균 37.3영업일이 걸린다."}],
+                    "debate": [], "scalpDesk": [], "riskCommittee": [],
+                    "pm": None, "memory": [],
+                },
+            },
+            "by_code": ["000660"], "others": [], "errors": [],
+        }
+
+    check("브리핑 파일이 없으면 None (예외 아님)", lambda: _assert(
+        agent_brief_load("/존재하지/않는/경로/agent-brief.json") is None))
+
+    def _brief_bad_json():
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            f.write("{ 깨진 JSON")
+            p = f.name
+        try:
+            _assert(agent_brief_load(p) is None)
+        finally:
+            os.unlink(p)
+    check("브리핑 JSON 이 깨져도 None (리포트 생성을 막지 않는다)", _brief_bad_json)
+
+    def _brief_wrong_schema():
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            json.dump({"schema": "something/else", "runs": {}}, f)
+            p = f.name
+        try:
+            _assert(agent_brief_load(p) is None)
+        finally:
+            os.unlink(p)
+    check("스키마가 다르면 받지 않는다", _brief_wrong_schema)
+
+    check("브리핑이 없으면 '없음'이라고 적는다", lambda: _assert(
+        "에이전트 분석이 없습니다" in render_agents_block(None)))
+
+    check("판정이 0건이면 그렇게 적는다", lambda: _assert(
+        "판정이 한 건도 없습니다" in render_agents_block(
+            {"schema": AGENT_BRIEF_SCHEMA, "runs": {}})))
+
+    def _brief_render():
+        h = render_agents_block(_brief_fixture(), ["000660"])
+        # 판정과 레벨이 그대로 들어간다
+        _assert("BUY" in h and "64%" in h)
+        _assert("1,480,000원" in h and "1,400,000원" in h and "1,700,000원" in h)
+        # 에이전트 원문을 요약하지 않고 그대로 싣는다
+        _assert("시총 3% 처분에 평균 37.3영업일이 걸린다." in h)
+        # 측정값이 아니라 의견임을 밝힌다
+        _assert("AI 에이전트의 판정" in h)
+        _assert("투자 조언이 아닙니다" in h)
+        # 언제 분석한 것인지, 무엇을 보고 판단했는지
+        _assert("2026-08-12" in h)          # 참고한 원장 기준일
+        _assert("이미 저장돼 있던" in h)     # executed=False 를 정직하게 적는다
+    check("에이전트 절이 판정·근거·출처를 그대로 싣는다", _brief_render)
+
+    def _brief_escape():
+        """에이전트 리포트는 언어모델이 만든 문자열이다. 그대로 HTML 에 넣으면
+        리포트가 깨지거나 스크립트가 실행될 수 있다."""
+        b = _brief_fixture()
+        b["runs"]["000660"]["analysts"][0]["report"] = "<script>alert(1)</script> & <b>굵게</b>"
+        b["runs"]["000660"]["nameKo"] = "<img src=x onerror=1>"
+        h = render_agents_block(b, ["000660"])
+        _assert("<script>" not in h)
+        _assert("&lt;script&gt;" in h)
+        _assert("onerror=1>" not in h)
+    check("에이전트 출력은 HTML 이스케이프한다", _brief_escape)
+
+    def _brief_downgrade():
+        """리스크 게이트가 강등한 판정은 그 사실이 눈에 보여야 한다."""
+        b = _brief_fixture()
+        d = b["runs"]["000660"]["decision"]
+        d.update(action="HOLD", riskDowngraded=True,
+                 risk={"rr": 1.2, "ok": False, "minRR": 1.5,
+                       "reasons": ["손익비 1.20 < 최소 기준 1.50"]})
+        h = render_agents_block(b, ["000660"])
+        _assert("강등" in h)
+        _assert("손익비 1.20 &lt; 최소 기준 1.50" in h)
+        _assert("게이트 미달" in h)
+    check("강등된 판정은 강등 사실과 사유를 함께 싣는다", _brief_downgrade)
+
+    def _brief_no_invent():
+        """레벨을 안 준 판정에 숫자를 만들어 넣지 않는다."""
+        b = _brief_fixture()
+        b["runs"]["000660"]["decision"].update(entry="-", stop=None, target="")
+        h = render_agents_block(b, ["000660"])
+        _assert("제시된 레벨 없음" in h)
+    check("레벨이 없으면 '없음'이라 쓰고 지어내지 않는다", _brief_no_invent)
+
     total = passed + len(failed)
     for f in failed:
         print("  FAIL", f)
@@ -5186,7 +5324,8 @@ def cmd_report(mock: bool) -> None:
     print(f"생성 완료: {render(ctx)}")
 
 
-def cmd_daily(market: str = "KOSDAQ", day: str = None, with_fs: bool = False) -> int:
+def cmd_daily(market: str = "KOSDAQ", day: str = None, with_fs: bool = False,
+              with_agents: bool = False, brief: str = None) -> int:
     """하루 한 번 이것만 돌리면 적재부터 리포트까지 끝납니다.
     전 단계가 원장을 읽어 계산하므로 리포트에 고정된 숫자는 없습니다."""
     day = day or date.today().strftime("%Y%m%d")
@@ -5210,6 +5349,9 @@ def cmd_daily(market: str = "KOSDAQ", day: str = None, with_fs: bool = False) ->
     con = connect()
     ctx = build_quant_context(con, market, True)
     con.close()
+    if with_agents:
+        ctx["agents_enabled"] = True
+        ctx["agents"] = agent_brief_load(brief)
     p = render_quant(ctx)
     print(f"  {p}")
     print(f"\n기준일 {ctx['as_of']} · 종목 {ctx['n_stocks']:,} · "
@@ -5549,6 +5691,221 @@ def cmd_facts(codes: list[str], with_disclosures: bool = False,
     return 0 if payload.get("ok") else 1
 
 
+# ── 통합 계층 (2) — 에이전트 판정 싣기 ─────────────────────────────────
+#
+# PIXEL TRADING FLOOR(../trading-floor)의 에이전트들이 분석·토론해 내린 판정을
+# 이 리포트에 한 절로 싣습니다. `node server/export-brief.js` 가 만든
+# agent.brief/1 JSON 을 읽습니다.
+#
+# 이 절이 지키는 것
+#
+#   1. **측정값과 판정을 섞지 않습니다.** §1~§4 는 공식 API 로 잰 값이고,
+#      이 절은 AI 가 그 값을 보고 내린 의견입니다. 성격이 다르므로 절을 나누고
+#      머리에 그 사실을 적습니다. 표 안에 끼워 넣으면 구분이 사라집니다.
+#   2. **판정을 요약하거나 재해석하지 않습니다.** 에이전트가 쓴 문장을 그대로
+#      옮깁니다. 여기서 다시 줄이면 근거가 사라진 결론만 남습니다.
+#   3. **언제 분석한 것인지 밝힙니다.** 저장된 리포트를 모은 것인지, 이번에
+#      실제로 돌린 것인지(executed), 참고한 원장 기준일이 언제인지 적습니다.
+#   4. **없으면 없다고 적습니다.** 브리핑 파일이 없거나 비었으면 그렇게 씁니다.
+#
+# 판단은 여전히 사람이 합니다 — 다만 이제 회의 자료에 에이전트 의견이 함께
+# 올라갑니다. 그것이 이 절의 목적입니다.
+
+AGENT_BRIEF_SCHEMA = "agent.brief/1"
+
+# 기본 위치 — trading-floor 가 같은 저장소 옆에 있다는 전제.
+AGENT_BRIEF_DEFAULT = ROOT.parent / "trading-floor" / "reports" / "agent-brief.json"
+
+# 판정별 배지 색. 템플릿에 이미 있는 클래스만 씁니다(새 CSS 를 넣지 않습니다).
+_ACTION_TAG = {
+    "BUY": "tag corporate_action", "LONG": "tag corporate_action",
+    "SELL": "tag risk", "SHORT": "tag risk",
+    "HOLD": "tag", "PASS": "tag",
+}
+
+
+def agent_brief_load(path=None) -> dict | None:
+    """브리핑 JSON 을 읽습니다. 없거나 깨졌으면 None — 예외를 올리지 않습니다.
+
+    리포트 생성이 에이전트 쪽 사정으로 실패하면 안 됩니다. 원장 리포트가
+    본체이고 에이전트 판정은 덧붙는 절입니다."""
+    p = Path(path) if path else AGENT_BRIEF_DEFAULT
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except OSError as e:
+        print(f"  [에이전트 브리핑 없음] {p}: {e.strerror}")
+        return None
+    try:
+        d = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"  [에이전트 브리핑 파싱 실패] {p}: {e}")
+        return None
+    if not isinstance(d, dict) or d.get("schema") != AGENT_BRIEF_SCHEMA:
+        print(f"  [에이전트 브리핑 형식 불일치] {p}: schema={d.get('schema') if isinstance(d, dict) else '?'}")
+        return None
+    return d
+
+
+def _agent_action_badge(action: str | None) -> str:
+    a = (action or "?").upper()
+    return f"<span class='{_ACTION_TAG.get(a, 'tag')}'>{_esc(a)}</span>"
+
+
+def _agent_reports_details(title: str, items: list, turn: bool = False) -> str:
+    """에이전트 리포트 묶음을 접이식으로. 원문을 줄이지 않습니다."""
+    rows = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        name = _esc(it.get("name") or it.get("id") or "?")
+        head = f"턴 {it['turn']} — {name}" if turn and it.get("turn") is not None else name
+        bubble = _esc(it.get("bubble") or "")
+        report = _esc(it.get("report") or "(리포트 없음)").replace("\n", "<br>")
+        rows.append(
+            f"<div style='margin:8px 0'><b>{head}</b>"
+            + (f" <span class='note' style='display:inline'>“{bubble}”</span>" if bubble else "")
+            + f"<div class='note' style='margin-top:3px;line-height:1.65'>{report}</div></div>")
+    if not rows:
+        return ""
+    return (f"<details><summary>{_esc(title)} ({len(rows)}건) — 펼치기</summary>"
+            + "".join(rows) + "</details>")
+
+
+def _agent_one(rec: dict) -> str:
+    """판정 한 건을 카드 하나로."""
+    d = rec.get("decision") or {}
+    name = rec.get("nameKo") or rec.get("display") or rec.get("symbol") or "?"
+    code = rec.get("krCode")
+    title = f"{_esc(name)}" + (f" <span class='note' style='display:inline'>{_esc(code)}</span>" if code else "")
+
+    # 판정 한 줄 — 여기가 회의에서 먼저 읽히는 자리입니다.
+    conf = d.get("confidence")
+    head = [f"{_agent_action_badge(d.get('action'))} <b>{_esc(name)}</b>"]
+    if conf is not None:
+        head.append(f"확신도 {conf}%")
+    if d.get("verdict"):
+        head.append(f"PM {_esc(d['verdict'])}")
+    if d.get("sizing"):
+        head.append(f"권장 비중 {_esc(str(d['sizing']))}")
+    if d.get("riskDowngraded"):
+        head.append("<span class='sev1'>리스크 게이트에 의해 강등됨</span>")
+
+    lv = []
+    for label, key in (("진입", "entry"), ("손절", "stop"), ("목표", "target")):
+        v = d.get(key)
+        if v not in (None, "", "-"):
+            lv.append(f"{label} {_esc(str(v))}")
+    levels = " · ".join(lv) if lv else "제시된 레벨 없음"
+
+    # 리스크 게이트 — 손익비와 강등 사유. 계산된 값이므로 그대로 옮깁니다.
+    risk = d.get("risk") or {}
+    gate = []
+    if risk.get("rr") is not None:
+        gate.append(f"손익비 {risk['rr']:.2f} (최소 기준 {risk.get('minRR', '-')})")
+    if risk.get("ok") is not None:
+        gate.append("게이트 통과" if risk["ok"] else "게이트 미달")
+    if risk.get("stopBeyondLiq"):
+        gate.append("<span class='sev1'>손절이 청산가보다 멀다 — 청산이 먼저 온다</span>")
+    reasons = [r for r in (risk.get("reasons") or []) if r]
+    gate_html = ""
+    if gate or reasons:
+        gate_html = ("<div class='note' style='margin-top:6px'><b>리스크 게이트</b> — "
+                     + " · ".join(gate)
+                     + ("<ul class='c' style='margin:4px 0 0;padding-left:16px'>"
+                        + "".join(f"<li>{_esc(r)}</li>" for r in reasons) + "</ul>" if reasons else "")
+                     + "</div>")
+
+    meta = []
+    if rec.get("ts"):
+        meta.append(f"분석 {_esc(str(rec['ts'])[:16].replace('T', ' '))}")
+    if rec.get("mode"):
+        meta.append(f"모드 {_esc(rec['mode'])}")
+    if rec.get("mock"):
+        meta.append("<b>데모(목업) 런 — 실제 모델 판정이 아님</b>")
+    if rec.get("kiAsOf"):
+        meta.append(f"참고한 원장 기준일 {_esc(rec['kiAsOf'])}")
+    if rec.get("priceLine"):
+        meta.append(_esc(rec["priceLine"]))
+
+    rationale = _esc(d.get("rationale") or "").replace("\n", "<br>")
+
+    return (
+        f"<div class='card'><h3>{title}</h3>"
+        f"<div style='margin-bottom:6px'>{' · '.join(head)}</div>"
+        f"<div class='note'>{levels}</div>"
+        + gate_html
+        + (f"<div style='margin-top:8px;font-size:12px;line-height:1.65'><b>근거</b> — {rationale}</div>"
+           if rationale else "")
+        + _agent_reports_details("애널리스트 리포트", rec.get("analysts"))
+        + _agent_reports_details("리서치 토론 (BULL vs BEAR)", rec.get("debate"), turn=True)
+        + _agent_reports_details("스캘핑 데스크", rec.get("scalpDesk"))
+        + _agent_reports_details("리스크 위원회", rec.get("riskCommittee"))
+        + (_agent_reports_details("포트폴리오 매니저", [rec["pm"] | {"name": "PM"}])
+           if isinstance(rec.get("pm"), dict) and not rec["pm"].get("failed") else "")
+        + (f"<div class='note' style='margin-top:6px'>과거 판정 회고 — "
+           + "; ".join(_esc(m) for m in rec["memory"]) + "</div>"
+           if rec.get("memory") else "")
+        + f"<div class='note' style='margin-top:6px'>{' · '.join(meta)}</div>"
+        + "</div>")
+
+
+def render_agents_block(brief: dict | None, codes: list[str] | None = None) -> str:
+    """§ 에이전트 분석 절의 본문 HTML.
+
+    codes 를 주면 그 종목을 먼저 싣고(워치리스트 순서), 나머지를 뒤에 붙입니다."""
+    banner = (
+        "<div class='conf' style='background:#2E4A6E'>"
+        "이 절은 <b>AI 에이전트의 판정</b>입니다 — 위 절들의 측정값과 성격이 다릅니다."
+        "<br><span>공식 API 로 잰 값이 아니라, 그 값과 시장 데이터를 보고 언어모델이 "
+        "내린 의견입니다. 실제 주문·거래는 발생하지 않았습니다. "
+        "회의에서는 §1~§4 의 측정값을 근거로, 이 절은 논점 정리용으로 쓰십시오.</span></div>")
+
+    if not brief:
+        return (banner + "<div class='flag'>에이전트 분석이 없습니다 — "
+                "<code>cd trading-floor &amp;&amp; node server/export-brief.js --run</code> "
+                "를 먼저 실행하고 리포트를 다시 생성하십시오.</div>")
+
+    runs = brief.get("runs") or {}
+    if not runs:
+        note = ""
+        errs = brief.get("errors") or []
+        if errs:
+            note = ("<ul class='c' style='margin:6px 0 0;padding-left:16px'>"
+                    + "".join(f"<li>{_esc(e.get('symbol', '?'))} — {_esc(e.get('message', ''))}</li>"
+                              for e in errs) + "</ul>")
+        return (banner + "<div class='flag'>브리핑에 판정이 한 건도 없습니다." + note + "</div>")
+
+    # 워치리스트 순서를 우선하고, 브리핑에만 있는 종목은 뒤에 붙입니다.
+    order = [c for c in (codes or []) if c in runs]
+    order += [k for k in sorted(runs) if k not in order]
+
+    cards = "".join(_agent_one(runs[k]) for k in order)
+
+    gen = _esc(str(brief.get("generated_at", ""))[:16].replace("T", " "))
+    executed = brief.get("executed")
+    how = ("이번 리포트 생성 시점에 새로 분석했습니다"
+           if executed else "이미 저장돼 있던 분석 결과를 모은 것입니다")
+    meta = (f"<div class='note'>출처: {_esc(brief.get('source', 'PIXEL TRADING FLOOR'))} · "
+            f"브리핑 생성 {gen} · {how} · 판정 {len(order)}건")
+    if brief.get("others"):
+        meta += (" · 한국 상장이 아닌 대상: "
+                 + ", ".join(_esc(o) for o in brief["others"]))
+    meta += "</div>"
+
+    errs = brief.get("errors") or []
+    err_html = ""
+    if errs:
+        err_html = ("<div class='flag'>분석에 실패한 종목이 있습니다 — 아래는 빠져 있습니다."
+                    "<ul class='c' style='margin:6px 0 0;padding-left:16px'>"
+                    + "".join(f"<li>{_esc(e.get('symbol', '?'))} — {_esc(e.get('message', ''))}</li>"
+                              for e in errs) + "</ul></div>")
+
+    disc = _esc(brief.get("disclaimer") or "")
+    return (banner + meta + err_html
+            + f"<div class='grid2'>{cards}</div>"
+            + (f"<div class='note' style='margin-top:8px'>{disc}</div>" if disc else ""))
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="ki_monitor.py",
@@ -5570,6 +5927,10 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--no-disclosure", action="store_true", help="DART 공시 조회 생략")
     r.add_argument("--portfolio", action="store_true", help="구 포지션 리포트")
     r.add_argument("--mock", action="store_true", help="가상 데이터 (포지션 리포트 전용)")
+    r.add_argument("--with-agents", action="store_true",
+                   help="에이전트 판정 절을 함께 싣습니다 (trading-floor 브리핑 필요)")
+    r.add_argument("--brief", help="에이전트 브리핑 JSON 경로 "
+                                   "(기본: ../trading-floor/reports/agent-brief.json)")
     w = sub.add_parser("watch", help="장중 폴링 알림")
     w.add_argument("--once", action="store_true", help="1회만 순회 (연결 시험용)")
     e = sub.add_parser("eod", help="종가 기준 알림 평가 (KB 불필요)")
@@ -5582,6 +5943,9 @@ def build_parser() -> argparse.ArgumentParser:
     dl.add_argument("--market", default="KOSDAQ", choices=["KOSPI", "KOSDAQ", "KONEX"])
     dl.add_argument("--day", help="기준일 YYYYMMDD (기본: 오늘)")
     dl.add_argument("--with-fs", action="store_true", help="재무까지 갱신")
+    dl.add_argument("--with-agents", action="store_true",
+                   help="에이전트 판정 절을 함께 싣습니다 (trading-floor 브리핑 필요)")
+    dl.add_argument("--brief", help="에이전트 브리핑 JSON 경로")
     mf = sub.add_parser("macro-us", help="해외 매크로 적재 (FRED · 무료 키 필요)")
     mf.add_argument("--from", dest="frm", help="시작일 YYYYMMDD (기본: 원장 최초일)")
     mf.add_argument("--include-restricted", action="store_true",
@@ -5635,6 +5999,9 @@ def main(argv: list[str] | None = None) -> int:
             con = connect()
             ctx = build_quant_context(con, args.market, not args.no_disclosure)
             con.close()
+            if args.with_agents:
+                ctx["agents_enabled"] = True
+                ctx["agents"] = agent_brief_load(args.brief)
             print(f"생성 완료: {render_quant(ctx)}")
     elif args.cmd == "watch":
         pos = _positions().set_index("code").to_dict("index")
@@ -5659,7 +6026,8 @@ def main(argv: list[str] | None = None) -> int:
             print("\n중단했습니다.")
             return 0
     elif args.cmd == "daily":
-        return cmd_daily(args.market, args.day, args.with_fs)
+        return cmd_daily(args.market, args.day, args.with_fs,
+                         args.with_agents, args.brief)
     elif args.cmd == "macro-us":
         if args.purge_restricted:
             con = connect()

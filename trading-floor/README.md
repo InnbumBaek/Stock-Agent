@@ -84,9 +84,10 @@ trading-floor/
 │  ├─ agents.js       에이전트 프롬프트 + claude 스폰 + 데모 목업
 │  ├─ engine.js       분석 엔진 (이벤트 시퀀스·병렬/토론 오케스트레이션·리포트 저장)
 │  ├─ ki-bridge.js    ../stock-monitor 원장(KRX·DART) 실측값 조회 (기본 꺼짐)
+│  ├─ export-brief.js 판정을 모아 주가 모니터링 리포트용 브리핑 JSON 생성 (CLI)
 │  └─ server.js       HTTP 서버 (정적 파일 + SSE + /api/analyze + /api/tape)
 ├─ public/            프론트엔드 (index.html / style.css / app.js)
-├─ reports/           분석 결과 저장 (YYYY-MM-DD-<심볼>-<HHmm>.md, decisions.json)
+├─ reports/           분석 결과 저장 (YYYY-MM-DD-<심볼>-<HHmm>.md + 같은 이름 .json, decisions.json)
 ├─ test/              테스트 (node:test + 네트워크 스모크)
 ├─ start-floor.cmd    Windows 실행기
 └─ package.json
