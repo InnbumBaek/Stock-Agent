@@ -16,6 +16,16 @@ pause
 where python >nul 2>&1
 if errorlevel 1 (set PY=py) else (set PY=python)
 
+%PY% --version >nul 2>&1
+if errorlevel 1 (
+  echo  [X] 파이썬을 찾지 못했습니다.
+  echo      방금 설치하셨다면 이 창을 닫고 새로 여십시오 ^(PATH 반영^).
+  pause
+  exit /b 1
+)
+echo  파이썬:
+%PY% --version
+
 echo.
 echo  [1/5] 파이썬 패키지 설치
 %PY% -m pip install --quiet pandas numpy scipy requests lxml

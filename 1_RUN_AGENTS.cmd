@@ -11,8 +11,20 @@ echo.
 
 where node >nul 2>&1
 if errorlevel 1 (
-  echo  [X] Node 가 설치돼 있지 않습니다.
-  echo      https://nodejs.org 에서 LTS 를 설치한 뒤 다시 실행하십시오.
+  echo  [X] Node 가 없습니다. 에이전트 화면은 Node 로 돕니다.
+  echo      ^(파이썬은 나중에 원장 만들 때 쓰고, 지금은 안 씁니다^)
+  echo.
+  where choco >nul 2>&1
+  if errorlevel 1 (
+    echo      https://nodejs.org 에서 LTS 를 받아 설치하십시오.
+  ) else (
+    echo      초콜리티가 있으니 이게 제일 빠릅니다.
+    echo      관리자 권한 PowerShell 을 열고:
+    echo.
+    echo          choco install nodejs-lts -y
+    echo.
+  )
+  echo      설치한 뒤에는 이 창을 닫고 새로 열어야 합니다 ^(PATH 반영^).
   echo.
   pause
   exit /b 1
