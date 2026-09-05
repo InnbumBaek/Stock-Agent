@@ -57,7 +57,7 @@ pushd trading-floor
 node server\export-brief.js --run --mode algo >> "%LOG%" 2>&1
 if errorlevel 1 (
   echo   ^[!^] 분석 실패 - 지난주 판정이 그대로 실립니다. >> "%LOG%" 2>&1
-  echo       월요일 회의 전에 3_ANALYZE.cmd 를 직접 돌리십시오. >> "%LOG%" 2>&1
+  echo       월요일 회의 전에 RUN_ALL.cmd 를 직접 돌리십시오. >> "%LOG%" 2>&1
 )
 popd
 echo      종료 %TIME% >> "%LOG%" 2>&1

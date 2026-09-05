@@ -20,11 +20,11 @@ echo   %~dp0
 echo.
 pause
 
-schtasks /Create /TN "StockAgent-Morning" /TR "\"%~dp05_MORNING.cmd\"" ^
+schtasks /Create /TN "StockAgent-Morning" /TR "\"%~dp0AUTO_MORNING.cmd\"" ^
   /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 08:50 /F
 if errorlevel 1 goto :failed
 
-schtasks /Create /TN "StockAgent-AfterClose" /TR "\"%~dp06_AFTER_CLOSE.cmd\"" ^
+schtasks /Create /TN "StockAgent-AfterClose" /TR "\"%~dp0AUTO_AFTER_CLOSE.cmd\"" ^
   /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 16:10 /F
 if errorlevel 1 goto :failed
 

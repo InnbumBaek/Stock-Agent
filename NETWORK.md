@@ -97,7 +97,7 @@ set NODE_EXTRA_CA_CERTS=C:\경로\사내인증서.crt
 > **`verify=False` 로 끄지 마십시오.** 검증을 끄면 그 연결은 누가 중간에 있어도
 > 알 수 없게 됩니다. API 키가 그 연결로 나갑니다.
 
-매번 치기 번거로우면 `1_RUN_AGENTS.cmd` 같은 실행기 맨 위(`@echo off` 다음 줄)에
+매번 치기 번거로우면 `PIXEL_FLOOR.cmd` 같은 실행기 맨 위(`@echo off` 다음 줄)에
 `set` 줄을 넣어 두면 됩니다.
 
 ---
