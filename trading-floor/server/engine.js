@@ -509,7 +509,7 @@ class Engine extends EventEmitter {
       });
 
       // 0) 실전 런이면 claude CLI 가용성부터 확인 — 없으면 즉시 중단하고 원인을 알린다
-      //    (13명을 헛돌린 뒤 "파싱 실패"만 남는 상황을 막는다)
+      //    (열여섯을 헛돌린 뒤 "파싱 실패"만 남는 상황을 막는다)
       if (!mock) {
         const chk = await checkClaudeAvailable();
         if (!chk.ok) {

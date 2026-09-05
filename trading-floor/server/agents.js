@@ -1044,7 +1044,7 @@ function normalizeResult(parsed) {
 }
 
 // 실전 런 직전 1회 점검 — claude CLI가 실제로 응답하는지 확인한다.
-// 없거나 막혀 있으면 에이전트 13명을 헛돌리는 대신 즉시 원인을 알려준다.
+// 없거나 막혀 있으면 에이전트 열여섯을 헛돌리는 대신 즉시 원인을 알려준다.
 let claudeCheck = null; // { ok, message, ts }
 const CHECK_TTL_MS = 5 * 60 * 1000;
 
