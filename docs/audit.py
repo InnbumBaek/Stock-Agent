@@ -1,6 +1,6 @@
 """저장소 최종 감사 — 넘기기 전에 조용히 깨질 수 있는 것을 전부 본다.
 
-    python tools_audit.py
+    python docs/audit.py
 
 테스트가 잡지 못하는 종류의 실패를 본다.
 
@@ -21,7 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 fails = []
 warns = []
 
@@ -73,13 +73,33 @@ for p in sorted(ROOT.glob("*.cmd")):
 print("\n[2-b] for /f 안의 작은따옴표 — 여기서 틀리면 날짜가 통째로 빈다")
 for p in sorted(ROOT.glob("*.cmd")):
     txt = p.read_bytes().decode("utf-8")
-    bad = []
+    hits = []
     for m in re.finditer(r"for /f [^\n]*in \('([^\n]*?)'\)", txt):
         # for /f 는 마지막 ' 까지를 명령으로 본다. 명령 안에 ' 가 있으면
         # 잘리는 위치가 달라져 조용히 빈 값이 된다.
         if "'" in m.group(1):
-            bad.append(m.group(1)[:60])
-    (ok if not bad else bad)(f"{p.name} for/f 인용 ({bad or '안전'})")
+            hits.append(m.group(1)[:60])
+    (ok if not hits else bad)(f"{p.name} for/f 인용 ({hits or '안전'})")
+
+print("\n[2-c] 지연확장이 켜진 파일의 짝 없는 ! — 조용히 지워진다")
+# setlocal enabledelayedexpansion 이 켜져 있으면 cmd 는 ! 를 변수 참조로
+# 본다. 짝이 없으면 그 ! 를 지운다 — 오류도 안 난다. node -e 안의
+# if(!Array.isArray(x)) 가 if(Array.isArray(x)) 가 되어 판정이 뒤집힌
+# 적이 있다. !VAR! 형태만 남기고, 나머지 ! 는 쓰지 않는 것이 답이다.
+for p in sorted(ROOT.glob("*.cmd")):
+    txt = p.read_bytes().decode("utf-8")
+    if "enabledelayedexpansion" not in txt.lower():
+        continue
+    hits = []
+    for i, ln in enumerate(txt.split("\r\n"), 1):
+        t = ln.strip()
+        if t.lower().startswith("rem") or t.startswith("::"):
+            continue
+        # !VAR! 를 걷어내고 남은 ! 가 있으면 그것이 지워질 놈이다.
+        rest = re.sub(r"![A-Za-z_][A-Za-z0-9_]*!", "", ln)
+        if "!" in rest:
+            hits.append(f"{i}행")
+    (ok if not hits else bad)(f"{p.name} 짝 없는 ! ({', '.join(hits) or '없음'})")
 
 print("\n[3] 배치가 부르는 파일이 실재하는가")
 for p in sorted(ROOT.glob("*.cmd")):
@@ -90,6 +110,20 @@ for p in sorted(ROOT.glob("*.cmd")):
         d = sub_.group(1)
         if d in ("stock-monitor", "trading-floor"):
             (ok if (ROOT / d).is_dir() else bad)(f"{p.name} → {d}/")
+
+print("\n[3-b] 배치가 넘기는 인자를 RUN_ALL 이 받는가")
+# schtasks 가 "RUN_ALL.cmd morning" 을 걸어 두었는데 RUN_ALL 에 그 갈래가
+# 없으면, 08:50 에 대화형 화면이 떠서 아무도 없는 앞에서 멈춘다. 오류도
+# 안 난다 — 그냥 리포트가 없다. 조용한 실패라 여기서 잡는다.
+runall = (ROOT / "RUN_ALL.cmd").read_bytes().decode("utf-8")
+wanted = set()
+for p in sorted(ROOT.glob("*.cmd")):
+    for m in re.finditer(r'RUN_ALL\.cmd\\?"?\s+([a-z]+)"', p.read_bytes().decode("utf-8")):
+        wanted.add(m.group(1))
+(ok if wanted else warn)(f"스케줄러가 넘기는 인자 — {sorted(wanted) or '없음'}")
+for arg in sorted(wanted):
+    has = f'"%MODE%"=="{arg}"' in runall
+    (ok if has else bad)(f"RUN_ALL.cmd 가 '{arg}' 를 분기한다")
 
 print("\n[4] 설정 키 동기화 — 한쪽에만 생기면 조용히 무시된다")
 r = subprocess.run(
@@ -203,7 +237,7 @@ n_js = int(re.search(r"# pass (\d+)", js.stdout).group(1))
 n_fail = int(re.search(r"# fail (\d+)", js.stdout).group(1))
 print(f"     실제: selftest {n_py} · npm test {n_js} (실패 {n_fail})")
 (ok if n_fail == 0 else bad)("npm test 실패 0")
-for p in ["README.md", "RUN.md", "CLAUDE.md", "docs/integration.md",
+for p in ["README.md", "docs/RUN.md", "CLAUDE.md", "docs/integration.md",
           "stock-monitor/README.md", "trading-floor/CLAUDE.md"]:
     txt = (ROOT / p).read_text(encoding="utf-8")
     stale = []

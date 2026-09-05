@@ -5724,7 +5724,7 @@ def cmd_diagnose() -> int:
         if not (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")):
             print("  · 회사에 프록시가 있다면 아직 알려 주지 않으셨습니다:")
             print("      set HTTPS_PROXY=http://프록시주소:포트")
-        print("\n  전산팀에 그대로 넘길 수 있는 요청서가 있습니다 — NETWORK.md")
+        print("\n  전산팀에 그대로 넘길 수 있는 요청서가 있습니다 — docs/NETWORK.md")
         print("  다른 망에서 원장을 만들어 옮기는 방법도 그 문서에 있습니다.")
         return 1
 

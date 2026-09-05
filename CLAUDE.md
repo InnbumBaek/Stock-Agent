@@ -111,7 +111,12 @@ diff 에 잡혀 실제 변경이 묻힌다. 편집 후 `file <파일>` 로 확�
 ```bash
 cd stock-monitor && python ki_monitor.py selftest   # 108개 (키·네트워크 불필요)
 cd trading-floor && npm test                         # 193개
+python docs/audit.py                                 # 저장소 전반 (줄바꿈·배치·설정키·유출)
 ```
+
+`docs/audit.py` 는 테스트가 못 보는 것을 본다 — CRLF/LF 가 뒤집혔는지, 배치 파일의
+괄호와 `for /f` 인용이 성립하는지, `config.js` 와 `ki-bridge.js` 의 키가 같은지,
+옵트인 기본값이 여전히 `false` 인지, 저장소에 키·실명이 새지 않았는지.
 
 통합 계층을 건드렸다면 **회귀 확인**까지 해라 — 에이전트 절을 끈 리포트가 통합 이전
 원본 코드의 출력과 같아야 한다.

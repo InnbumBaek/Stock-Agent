@@ -61,7 +61,7 @@ KRX·DART 공식 API 로 사실을 잽니다
 
 ## 한 번에 돌리기
 
-> 처음 돌린다면 [`RUN.md`](RUN.md) 를 보십시오 — 키 없이 되는 검증부터 실전 런까지
+> 처음 돌린다면 [`docs/RUN.md`](docs/RUN.md) 를 보십시오 — 키 없이 되는 검증부터 실전 런까지
 > 순서대로 적어 두었습니다.
 
 ```bash
@@ -93,7 +93,7 @@ cd stock-monitor && python ki_monitor.py diagnose
 다섯 개 API 를 각각 실제로 불러 **어디가 왜 막혔는지** 갈라 줍니다 — 키 문제인지,
 KRX 의 서비스별 사용신청 누락인지, 방화벽인지. 전부 막혀 있으면 "다섯 곳이 아니라
 한 곳의 문제"라고 알려 줍니다. 전산팀에 넘길 허용 요청서는
-[`NETWORK.md`](NETWORK.md) 에 있습니다.
+[`docs/NETWORK.md`](docs/NETWORK.md) 에 있습니다.
 
 ### 사내망·폐쇄망이라면
 
