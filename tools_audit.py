@@ -70,6 +70,17 @@ for p in sorted(ROOT.glob("*.cmd")):
         depth += core.count("(") - core.count(")")
     (ok if depth == 0 else bad)(f"{p.name} 괄호 균형 ({depth:+d})")
 
+print("\n[2-b] for /f 안의 작은따옴표 — 여기서 틀리면 날짜가 통째로 빈다")
+for p in sorted(ROOT.glob("*.cmd")):
+    txt = p.read_bytes().decode("utf-8")
+    bad = []
+    for m in re.finditer(r"for /f [^\n]*in \('([^\n]*?)'\)", txt):
+        # for /f 는 마지막 ' 까지를 명령으로 본다. 명령 안에 ' 가 있으면
+        # 잘리는 위치가 달라져 조용히 빈 값이 된다.
+        if "'" in m.group(1):
+            bad.append(m.group(1)[:60])
+    (ok if not bad else bad)(f"{p.name} for/f 인용 ({bad or '안전'})")
+
 print("\n[3] 배치가 부르는 파일이 실재하는가")
 for p in sorted(ROOT.glob("*.cmd")):
     txt = p.read_bytes().decode("utf-8")

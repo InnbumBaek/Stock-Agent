@@ -22,7 +22,7 @@ rem ===========================================================
 set MARKET=KOSDAQ
 
 if not exist logs mkdir logs
-for /f %%i in ('powershell -NoProfile -Command "(Get-Date).ToString('yyyyMMdd')"') do set STAMP=%%i
+for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"') do set STAMP=%%i
 set LOG=%~dp0logs\%STAMP%-close.log
 
 where python >nul 2>&1

@@ -20,7 +20,7 @@ rem ===========================================================
 set MARKET=KOSDAQ
 
 if not exist logs mkdir logs
-for /f %%i in ('powershell -NoProfile -Command "(Get-Date).ToString('yyyyMMdd')"') do set STAMP=%%i
+for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"') do set STAMP=%%i
 for /f %%i in ('powershell -NoProfile -Command "(Get-Date).DayOfWeek"') do set DOW=%%i
 set LOG=%~dp0logs\%STAMP%-morning.log
 
