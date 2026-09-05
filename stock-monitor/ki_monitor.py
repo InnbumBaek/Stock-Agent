@@ -11,6 +11,7 @@ ki_monitor.py — 상장 포트폴리오사 회수 판단 리포트 자동화 (�
   python ki_monitor.py report --mock         # 가상 데이터로 리포트 1부 (키 불필요)
   python ki_monitor.py check-auth            # API 키 로딩 확인 (호출 없음)
   python ki_monitor.py diagnose              # API 5종을 실제로 불러 진단
+  python ki_monitor.py factors 000660        # 논문 팩터 (원장만 사용)
   python ki_monitor.py ingest --from 20240101
   python ki_monitor.py report
   python ki_monitor.py watch                 # 장중 폴링 알림 (KIS 실시간)
@@ -5357,6 +5358,99 @@ def selftest() -> int:
         _assert(not (banned & set(_facts_measures(row))))
     check("facts 는 판단(등급·점수·권고)을 내보내지 않는다", _facts_no_verdict)
 
+    # ── 논문 팩터 ───────────────────────────────────────────────────
+    #
+    # 팩터 값이 틀리면 논문 인용이 그대로 거짓이 됩니다. "Amihud (2002) 기준"
+    # 이라고 적어 놓고 다른 것을 계산하고 있으면, 회의에서 그것을 알아챌 방법이
+    # 없습니다. 그래서 손으로 낼 수 있는 계열을 만들어 값을 직접 맞춥니다.
+    def _factor_ledger():
+        """하루 +0.2% 씩 오르는 300일. 모든 팩터를 손으로 낼 수 있습니다."""
+        con = sqlite3.connect(":memory:")
+        con.executescript(SCHEMA)
+        n = 300
+        dates = pd.bdate_range("2025-01-01", periods=n).strftime("%Y-%m-%d")
+        rows = []
+        for i, dt in enumerate(dates):
+            c = 1000.0 * (1.002 ** i)
+            rows.append((dt, "111111", "검증사", "KOSDAQ", c, c * 1.01, c * 0.99, c,
+                         10000.0, c * 10000.0, 1e6, 1.0))
+        con.executemany(
+            "INSERT INTO price_daily (date,code,name,market,open,high,low,close,"
+            "volume,value,shares,adj_factor) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+        con.execute("INSERT INTO instruments (code,name,market,list_date) "
+                    "VALUES (?,?,?,?)", ("111111", "검증사", "KOSDAQ", "2024-03-01"))
+        con.commit()
+        return con
+
+    def _factors_math():
+        con = _factor_ledger()
+        p = factors_payload(con, "111111", 60)
+        con.close()
+        _assert(p["ok"] is True and p["schema"] == FACTORS_SCHEMA)
+        f = {x["key"]: x for x in p["factors"]}
+        # 12-1 모멘텀 = close[-22]/close[-252] - 1 = 1.002^230 - 1
+        _assert(abs(f["mom_12_1"]["value"] - (1.002 ** 230 - 1) * 100) < 1e-6)
+        # 1개월 반전 = 1.002^21 - 1
+        _assert(abs(f["rev_1m"]["value"] - (1.002 ** 21 - 1) * 100) < 1e-6)
+        # 52주 근접도 = 종가 / 최고 고가 = 1 / 1.01
+        _assert(abs(f["high52"]["value"] - 100 / 1.01) < 1e-6)
+        # 회전율 = 거래량 / 상장주식수 = 10000 / 1e6
+        _assert(abs(f["turnover"]["value"] - 1.0) < 1e-9)
+        # 상장 후 경과 — 년은 개월의 12분의 1
+        _assert(abs(f["ipo_age_y"]["value"] * 12 - f["ipo_age_m"]["value"]) < 1e-9)
+    check("논문 팩터가 손으로 낸 값과 같다", _factors_math)
+
+    def _factors_absent():
+        """없는 값을 만들지 않는가. 이쪽이 더 중요합니다."""
+        con = _factor_ledger()
+        p = factors_payload(con, "111111", 60)
+        con.close()
+        f = {x["key"]: x for x in p["factors"]}
+        # 단조 증가 계열은 가격변화의 자기공분산이 양수 → Roll 은 정의되지 않음.
+        # 절댓값을 씌워 숫자를 내지 않고 비웁니다.
+        _assert(f["spread_roll"]["value"] is None and f["spread_roll"]["reason"])
+        # 시장지수가 없으면 총변동성으로 대신하지 않습니다.
+        _assert(f["ivol"]["value"] is None and "시장지수" in f["ivol"]["reason"])
+        # 값이 없어도 논문·주장·한계는 그대로 붙어 있어야 합니다.
+        for x in p["factors"]:
+            _assert(x["paper"] and x["claim"] and x["limits"])
+    check("팩터는 없는 값을 만들지 않는다 (Roll·고유변동성)", _factors_absent)
+
+    def _factors_cited():
+        con = _factor_ledger()
+        p = factors_payload(con, "111111", 60)
+        con.close()
+        known = set(papers())
+        _assert(bool(known))
+        # 모든 팩터의 논문 키가 .papers.json 에 실재해야 합니다.
+        for x in p["factors"]:
+            _assert(x["paper"] in known)
+            _assert(x["citation"] and str(p["papers"][x["paper"]]["year"]) in x["citation"])
+        # 집행 모형도 마찬가지입니다 — §3 이 쓰는 가정의 출처입니다.
+        _assert(p["impact_model"]["paper"] in known)
+        _assert(p["impact_model"]["citation"] and p["impact_model"]["limits"])
+    check("모든 팩터가 실재하는 논문을 인용한다", _factors_cited)
+
+    def _factors_no_verdict():
+        """팩터는 재는 쪽입니다. 여기에 판정 어휘가 들어가면 절이 무너집니다."""
+        con = _factor_ledger()
+        p = factors_payload(con, "111111", 60)
+        con.close()
+        banned = ("매수", "매도", "저평가", "고평가", "추천", "목표가", "비중확대")
+        blob = json.dumps(p, ensure_ascii=False)
+        hit = [w for w in banned if w in blob]
+        _assert(not hit)
+    check("팩터 출력에 판정 어휘가 없다", _factors_no_verdict)
+
+    def _factors_only_ledger():
+        """막힌·선택 API 를 쓰지 않는가. 사내망에서도 나와야 합니다."""
+        src = io.open(__file__, encoding="utf-8").read()
+        blk = src[src.index("def factors_payload("):src.index("def cmd_factors(")]
+        for banned in ("KISClient", "ecos_key_stats", "fred_fetch", "krx_get",
+                       "dart_call", "requests"):
+            _assert(banned not in blk)
+    check("팩터는 원장만 쓴다 (KIS·ECOS·FRED·네트워크 없음)", _factors_only_ledger)
+
     # 통합 계층 (3) — 원장 일봉 내보내기
     def _candles_ledger():
         """검증용 인메모리 원장. 3일치 · 마지막 날은 고가가 결측."""
@@ -6756,6 +6850,323 @@ def cmd_candles(code: str, days: int = 200, raw: bool = False,
 QUOTE_SCHEMA = "ki.quote/1"
 
 
+# ── 논문 팩터 ─────────────────────────────────────────────────────────
+#
+# 여기 있는 값은 전부 **원장의 일봉만으로** 계산합니다. 막히거나 선택인 API
+# (KIS 실시간·ECOS·FRED) 는 하나도 쓰지 않습니다. KRX 일봉이 있으면 사내망에서도
+# 그대로 나옵니다.
+#
+# 이 절의 규율은 다른 측정과 같습니다 — **재기만 합니다.** "저평가"·"매수"
+# 같은 말을 여기서 붙이지 않습니다. 값이 무엇을 뜻하는지는 데스크의 퀀트
+# 에이전트가 논문을 근거로 제안하고, 최종 판단은 회의에서 사람이 합니다.
+#
+# 각 팩터는 논문 키(.papers.json)와 **그 논문이 주장하지 않는 것**을 함께
+# 답니다. 팩터를 근거로 쓸 때 가장 흔한 사고는 논문이 말한 적 없는 것을
+# 말했다고 읽는 것입니다.
+
+FACTORS_SCHEMA = "ki.factors/1"
+PAPERS_PATH = ROOT / ".papers.json"
+
+
+def papers() -> dict:
+    try:
+        with io.open(PAPERS_PATH, encoding="utf-8") as f:
+            return (json.load(f) or {}).get("papers") or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def cite(key: str) -> str:
+    """논문 한 줄 인용. 없으면 빈 문자열 — 지어내지 않습니다."""
+    p = papers().get(key)
+    if not p:
+        return ""
+    doi = f" doi:{p['doi']}" if p.get("doi") else ""
+    return (f"{p['authors']} ({p['year']}) {p['title']}. "
+            f"{p['journal']} {p['volume']}, {p['pages']}.{doi}")
+
+
+def _f_pct(px: pd.Series) -> pd.Series:
+    return px.pct_change()
+
+
+def _f_momentum(df: pd.DataFrame) -> tuple:
+    """12-1 모멘텀 — 최근 1개월을 뺀 12개월 수익률.
+
+    최근 한 달을 빼는 이유는 그 구간이 반대 방향(단기 반전)이기 때문입니다.
+    두 효과를 섞으면 서로를 지웁니다."""
+    c = df["close"]
+    if len(c) < 252:
+        return None, len(c), "일봉 252개가 필요합니다"
+    p_now, p_then = c.iloc[-22], c.iloc[-252]
+    if not p_then:
+        return None, len(c), "기준 시점 종가가 0 입니다"
+    return float(p_now / p_then - 1.0) * 100.0, 252, None
+
+
+def _f_reversal(df: pd.DataFrame) -> tuple:
+    c = df["close"]
+    if len(c) < 22:
+        return None, len(c), "일봉 22개가 필요합니다"
+    if not c.iloc[-22]:
+        return None, len(c), "기준 시점 종가가 0 입니다"
+    return float(c.iloc[-1] / c.iloc[-22] - 1.0) * 100.0, 22, None
+
+
+def _f_amihud(df: pd.DataFrame, win: int = 60) -> tuple:
+    """Amihud 비유동성 — |일수익률| / 일거래대금. 논문과 같이 1e6 배로 냅니다.
+
+    회수 판단에서 이 값이 특히 중요합니다. "얼마에 팔리는가"가 아니라
+    "팔면 얼마나 밀리는가"를 재기 때문입니다."""
+    d = df.tail(win + 1)
+    r = _f_pct(d["close"]).abs()
+    v = d["value"]
+    ok = (v > 0) & r.notna()
+    if int(ok.sum()) < 20:
+        return None, int(ok.sum()), "거래대금이 있는 날이 20일 미만입니다"
+    return float((r[ok] / v[ok]).mean() * 1e6), int(ok.sum()), None
+
+
+def _f_ivol(df: pd.DataFrame, mkt: pd.Series, win: int = 60) -> tuple:
+    """고유변동성 — 시장모형 회귀의 잔차 변동성(연율).
+
+    시장지수가 원장에 없으면 **총변동성으로 대신하지 않습니다.** 논문이 말한
+    것은 고유변동성이고, 총변동성을 그 이름으로 부르면 인용이 거짓이 됩니다."""
+    if mkt is None or mkt.empty:
+        return None, 0, "원장에 시장지수가 없어 고유변동성을 분리할 수 없습니다"
+    d = df.tail(win + 1)
+    r = _f_pct(d["close"]).dropna()
+    m = mkt.reindex(r.index).pct_change().dropna() if False else None
+    j = pd.concat([r.rename("r"), mkt.rename("m")], axis=1, join="inner").dropna()
+    if len(j) < 30:
+        return None, len(j), "겹치는 거래일이 30일 미만입니다"
+    x, y = j["m"].to_numpy(), j["r"].to_numpy()
+    vx = float(np.var(x))
+    if vx <= 0:
+        return None, len(j), "시장수익률의 분산이 0 입니다"
+    beta = float(np.cov(y, x, ddof=1)[0, 1] / (vx * len(x) / (len(x) - 1)))
+    resid = y - (float(np.mean(y)) - beta * float(np.mean(x))) - beta * x
+    return float(np.std(resid, ddof=1) * np.sqrt(252) * 100.0), len(j), None
+
+
+def _f_high52(df: pd.DataFrame) -> tuple:
+    d = df.tail(252)
+    if len(d) < 120:
+        return None, len(d), "일봉 120개가 필요합니다"
+    hi = float(d["high"].max())
+    if not hi:
+        return None, len(d), "52주 최고가가 0 입니다"
+    return float(d["close"].iloc[-1] / hi) * 100.0, len(d), None
+
+
+def _f_turnover(df: pd.DataFrame, win: int = 60) -> tuple:
+    d = df.tail(win)
+    ok = d["shares"].notna() & (d["shares"] > 0) & d["volume"].notna()
+    if int(ok.sum()) < 20:
+        return None, int(ok.sum()), "상장주식수가 있는 날이 20일 미만입니다"
+    return float((d["volume"][ok] / d["shares"][ok]).mean() * 100.0), int(ok.sum()), None
+
+
+def _f_spread_hl(df: pd.DataFrame, win: int = 60) -> tuple:
+    """Corwin-Schultz 고저가 스프레드 추정 — 이틀치 고가·저가만으로 냅니다.
+
+    호가 데이터가 없어도 되는 것이 이 추정량의 요점입니다. 실시간 호가(KIS)가
+    막혀 있어도 일봉만으로 거래비용의 대리값을 얻습니다."""
+    d = df.tail(win + 1)
+    h, l = d["high"].to_numpy(), d["low"].to_numpy()
+    k = 3.0 - 2.0 * np.sqrt(2.0)
+    vals = []
+    for i in range(len(d) - 1):
+        h1, l1, h2, l2 = h[i], l[i], h[i + 1], l[i + 1]
+        if min(h1, l1, h2, l2) <= 0:
+            continue
+        b = np.log(h1 / l1) ** 2 + np.log(h2 / l2) ** 2
+        g = np.log(max(h1, h2) / min(l1, l2)) ** 2
+        a = (np.sqrt(2.0 * b) - np.sqrt(b)) / k - np.sqrt(g / k)
+        sp = 2.0 * (np.exp(a) - 1.0) / (1.0 + np.exp(a))
+        vals.append(max(sp, 0.0))       # 논문의 처리 — 음수 추정치는 0 으로
+    if len(vals) < 20:
+        return None, len(vals), "쓸 수 있는 이틀 쌍이 20개 미만입니다"
+    return float(np.mean(vals) * 10000.0), len(vals), None      # bp
+
+
+def _f_ipo_age(list_date) -> tuple:
+    """상장 후 경과 개월. 비상장 투자 후 상장한 종목을 파는 자리에서는
+    팩터보다 이쪽이 직접적입니다 — 락업과 상장 후 장기성과가 여기에 걸립니다."""
+    if not list_date:
+        return None, 0, "원장에 상장일이 없습니다"
+    try:
+        d0 = pd.Timestamp(str(list_date))
+    except Exception:                                   # noqa: BLE001
+        return None, 0, f"상장일을 읽지 못했습니다: {list_date}"
+    m = (pd.Timestamp.today().normalize() - d0).days / 30.44
+    if m < 0:
+        return None, 0, "상장일이 미래입니다"
+    return float(m), 1, None
+
+
+def _f_spread_roll(df: pd.DataFrame, win: int = 60) -> tuple:
+    """Roll 내재 스프레드 — 가격변화의 1차 자기공분산.
+
+    공분산이 양수면 이 추정량은 **정의되지 않습니다.** 그럴 때 절댓값을 씌워
+    숫자를 내는 관행이 있지만, 그것은 논문이 말한 것이 아니므로 없다고 냅니다."""
+    d = df.tail(win + 1)
+    dp = d["close"].diff().dropna()
+    if len(dp) < 30:
+        return None, len(dp), "가격변화가 30개 미만입니다"
+    cov = float(np.cov(dp.to_numpy()[1:], dp.to_numpy()[:-1], ddof=1)[0, 1])
+    if cov >= 0:
+        return None, len(dp), f"자기공분산이 양수({cov:.4f}) — 이 추정량은 정의되지 않습니다"
+    mp = float(d["close"].mean())
+    if mp <= 0:
+        return None, len(dp), "평균 가격이 0 입니다"
+    return float(2.0 * np.sqrt(-cov) / mp * 10000.0), len(dp), None     # bp
+
+
+# 팩터 정의 — 이름·단위·논문·논문이 주장하는 것·주장하지 않는 것.
+FACTOR_DEFS = (
+    ("mom_12_1", "12-1 모멘텀", "%", "jt1993",
+     "과거 3~12개월 승자가 이후에도 이겼다. 최근 1개월은 반대 방향이라 뺀다.",
+     "미국 1965-1989 표본이다. 한국 코스닥·소형주에 그대로 성립한다는 근거가 "
+     "이 값 안에 없다. 모멘텀은 반전 국면에서 크게 무너진 이력이 있다."),
+    ("rev_1m", "1개월 반전", "%", "j1990",
+     "최근 1개월 수익률은 다음 달과 음(-)의 관계를 보였다.",
+     "월별 자료의 통계적 성질이다. 개별 종목 한 개의 다음 달을 맞히는 도구가 아니다."),
+    ("amihud", "Amihud 비유동성", "×1e6", "amihud2002",
+     "거래대금 대비 가격이 크게 움직일수록 비유동적이고, 그만큼 요구수익률이 높다.",
+     "일별 집계라 장중 충격은 못 본다. 거래정지·거래대금 0 인 날은 계산에서 뺐다."),
+    ("ivol", "고유변동성 (연율)", "%", "ahxz2006",
+     "고유변동성이 높은 종목의 이후 수익률이 낮았다.",
+     "시장모형 잔차다. 지수 하나로 잡은 베타이므로 산업·규모 요인이 잔차에 남는다."),
+    ("high52", "52주 최고가 근접도", "%", "gh2004",
+     "52주 최고가에 가까울수록 이후 수익률이 좋았다 — 과거 수익률보다 설명력이 컸다.",
+     "가격 위치일 뿐 기업가치가 아니다. 유상증자·액면분할 등 사건이 섞이면 왜곡된다."),
+    ("turnover", "일평균 회전율", "%", "dnr1998",
+     "회전율이 높을수록(유동적일수록) 이후 수익률이 낮았다 — 유동성 프리미엄.",
+     "상장주식수 대비다. 유통주식수가 아니므로 보호예수·대주주 지분이 많으면 과소평가된다."),
+    ("spread_hl", "고저가 스프레드 추정", "bp", "cs2012",
+     "이틀치 고가·저가만으로 유효 스프레드를 추정한다 — 호가 데이터가 필요 없다.",
+     "장 시작 갭과 거래 없는 시간을 완전히 걷어내지 못한다. 음수 추정치는 "
+     "논문의 처리대로 0 으로 두었다."),
+    ("spread_roll", "Roll 내재 스프레드", "bp", "roll1984",
+     "가격변화의 음(-)의 자기공분산에서 유효 스프레드를 역산한다.",
+     "자기공분산이 양수면 정의되지 않는다. 그럴 때 값을 만들지 않고 비운다."),
+    # ── 아래 둘은 이 데스크에만 있는 조건입니다. 비상장 투자 후 상장한
+    #    종목을 파는 자리에서는 일반 팩터보다 이쪽이 직접적입니다.
+    ("ipo_age_m", "상장 후 경과", "개월", "fh2001",
+     "락업 만료일 부근에서 거래량이 크게 늘고 가격이 영구적으로 눌렸다 — "
+     "만료 뒤에도 되돌아오지 않았다.",
+     "미국 표본이고 한국의 의무보유확약 제도와 기간·대상이 다르다. 경과 개월은 "
+     "상장일에서 센 것일 뿐 **실제 확약 기간이 아니다** — 원문은 증권신고서를 봐야 한다."),
+    ("ipo_age_y", "상장 후 경과", "년", "ritter1991",
+     "상장 기업은 상장 첫날 종가부터 3년까지 비교기업 대비 크게 부진했다.",
+     "1975-84 미국 표본의 평균이다. 개별 종목의 3년을 예측하는 도구가 아니고, "
+     "이 값 자체는 그냥 달력 나이다."),
+)
+
+
+def factors_payload(con, code: str, win: int = 60) -> dict:
+    """논문 팩터 한 벌. 전부 원장의 일봉만으로 계산합니다."""
+    code = str(code).strip()
+    out = {"ok": False, "schema": FACTORS_SCHEMA, "code": code, "window": int(win),
+           "source": "한국거래소 KRX Open API — 일별 시세 (원장)",
+           "computed_at": datetime.now().isoformat(timespec="seconds"),
+           "factors": [], "papers": {}, "reason": None}
+
+    df = price_panel(con, [code], adjusted=True)
+    if df.empty:
+        out["reason"] = "원장에 이 종목의 시세가 없습니다"
+        return out
+    df = (df.sort_values("date")
+            .dropna(subset=["close"])
+            .reset_index(drop=True))
+    if len(df) < 30:
+        out["reason"] = f"일봉이 {len(df)}개뿐입니다 (30개 이상 필요)"
+        return out
+    df.index = pd.to_datetime(df["date"])
+
+    market = facts_market_of(con, code)
+    out["market"] = market
+    mkt = None
+    try:
+        idx = pd.read_sql_query(
+            "SELECT date, close FROM index_daily WHERE index_name=? ORDER BY date",
+            con, params=(market,))
+        if not idx.empty:
+            mkt = pd.Series(idx["close"].to_numpy(),
+                            index=pd.to_datetime(idx["date"])).pct_change().dropna()
+    except Exception:                                   # noqa: BLE001
+        mkt = None
+
+    list_date = None
+    try:
+        r = pd.read_sql_query("SELECT list_date FROM instruments WHERE code=?",
+                              con, params=(code,))
+        if not r.empty:
+            list_date = r["list_date"].iloc[0]
+    except Exception:                                   # noqa: BLE001
+        list_date = None
+
+    calc = {"mom_12_1": lambda: _f_momentum(df), "rev_1m": lambda: _f_reversal(df),
+            "amihud": lambda: _f_amihud(df, win), "ivol": lambda: _f_ivol(df, mkt, win),
+            "high52": lambda: _f_high52(df), "turnover": lambda: _f_turnover(df, win),
+            "spread_hl": lambda: _f_spread_hl(df, win),
+            "spread_roll": lambda: _f_spread_roll(df, win),
+            "ipo_age_m": lambda: _f_ipo_age(list_date),
+            "ipo_age_y": lambda: (lambda v, n, w: (v / 12.0 if v is not None else None,
+                                                   n, w))(*_f_ipo_age(list_date))}
+
+    used = set()
+    for key, name, unit, pkey, claim, limits in FACTOR_DEFS:
+        try:
+            val, n, why = calc[key]()
+        except Exception as e:                          # noqa: BLE001
+            val, n, why = None, 0, f"{type(e).__name__}: {e}"
+        used.add(pkey)
+        out["factors"].append({
+            "key": key, "name": name, "unit": unit, "value": val, "n": n,
+            "paper": pkey, "citation": cite(pkey), "claim": claim, "limits": limits,
+            "reason": why,
+        })
+    # 값은 없지만 §3 실행 시뮬레이션이 쓰는 가정이므로 출처를 함께 냅니다.
+    used.add("athl2005")
+    used.add("ac2000")
+    out["papers"] = {k: papers().get(k) for k in sorted(used) if papers().get(k)}
+    out["impact_model"] = {
+        "assumption": "가격 충격은 주문량의 제곱근에 비례한다고 가정합니다 (§3 실행 시뮬레이션).",
+        "paper": "athl2005", "citation": cite("athl2005"),
+        "also": cite("ac2000"),
+        "limits": "미국 대형주 체결 자료에서 추정된 형태다. 한국 코스닥 소형주의 "
+                  "계수가 같다는 근거는 없다 — 형태만 빌려 쓴 것이다.",
+    }
+    out["ok"] = any(f["value"] is not None for f in out["factors"])
+    if not out["ok"]:
+        out["reason"] = "계산된 팩터가 하나도 없습니다"
+    return out
+
+
+def cmd_factors(codes: list[str], win: int = 60, indent: int | None = None) -> int:
+    """stdout 은 JSON 만. 사람용 메시지는 stderr 로."""
+    dbf = Path(env("db_path"))
+    if not dbf.exists():
+        print(json.dumps(
+            {"ok": False, "schema": FACTORS_SCHEMA, "factors": [],
+             "reason": f"원장이 없습니다: {dbf.name}. "
+                       f"ingest --universe <시장> 을 먼저 실행하십시오."},
+            ensure_ascii=False, indent=indent))
+        return 1
+    con = connect()
+    try:
+        payloads = [factors_payload(con, c, win) for c in codes]
+    finally:
+        con.close()
+    body = payloads[0] if len(payloads) == 1 else {
+        "schema": FACTORS_SCHEMA, "ok": any(p["ok"] for p in payloads),
+        "items": payloads}
+    print(json.dumps(body, ensure_ascii=False, indent=indent))
+    return 0 if (body.get("ok") if len(payloads) == 1 else body["ok"]) else 1
+
+
 def quote_payload(code: str, with_orderbook: bool = True) -> dict:
     """실시간 시세 한 종목. 실패해도 예외를 올리지 않고 ok:false 로 돌려줍니다."""
     code = str(code).strip()
@@ -7311,6 +7722,12 @@ def build_parser() -> argparse.ArgumentParser:
     cd_.add_argument("--raw", action="store_true",
                      help="수정주가 대신 원주가 (기본은 수정주가)")
     cd_.add_argument("--indent", type=int, default=None, help="JSON 들여쓰기")
+
+    fa = sub.add_parser(
+        "factors", help="논문 팩터를 JSON 으로 출력 (원장만 사용 · 네트워크 불필요)")
+    fa.add_argument("codes", nargs="+", metavar="000660", help="종목코드")
+    fa.add_argument("--window", type=int, default=60, help="유동성 팩터 관측창 (기본 60일)")
+    fa.add_argument("--indent", type=int, default=None, help="JSON 들여쓰기")
     return ap
 
 
@@ -7426,6 +7843,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_facts(codes, args.with_disclosures, args.indent)
     elif args.cmd == "candles":
         return cmd_candles(args.code, args.days, args.raw, args.indent)
+    elif args.cmd == "factors":
+        return cmd_factors(args.codes, args.window, args.indent)
     elif args.cmd == "quote":
         return cmd_quote(args.q_codes, not args.no_orderbook, args.indent)
     elif args.cmd == "macro":

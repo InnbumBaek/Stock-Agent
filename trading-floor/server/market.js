@@ -1123,6 +1123,7 @@ async function fetchMarket(resolved) {
   let krCode = null; // KRX 6자리 코드 (KR stocks only)
   let kiQuote = null; // KIS 실시간 시세 (ki.realtime 을 켰을 때만)
   let kiMacro = null; // 한국은행 거시 통계 (ki.macro 를 켰을 때만)
+  let kiFactors = null; // 논문 팩터 (원장의 일봉만 사용 — 별도 스위치 없음)
   let nameKo = resolved.nameKo || null; // 한국어 종목명 — 원장에서 보강될 수 있다
   let ki = null; // 주가 모니터링 원장의 실측값 (ki.enabled 일 때만)
 
@@ -1208,7 +1209,7 @@ async function fetchMarket(resolved) {
     sentiment.lines = ['주식은 공포·탐욕 지수 미적용 — 뉴스 헤드라인으로 심리 판단'];
 
     const perpSym = ((KR_STOCKS[symbol] || {}).perps || {}).binance || null;
-    const [newsR, intraR, boardR, k15R, k1dR, kiR, kqR, kmR] = await Promise.allSettled([
+    const [newsR, intraR, boardR, k15R, k1dR, kiR, kqR, kmR, kfR] = await Promise.allSettled([
       fetchNews(newsQuery(resolved)),
       fetchYahooIntraday(resolved.yahoo),
       yq && resolved.tapbitPair
@@ -1223,6 +1224,8 @@ async function fetchMarket(resolved) {
       // 거시 재료(한국은행 ECOS). 종목이 아니라 시장 배경이라 런당 한 번이고,
       // ki.macro 가 꺼져 있으면 즉시 null 이다.
       kiBridge.fetchKiMacro().catch(() => null),
+      // 논문 팩터. 원장의 일봉만 쓰므로 사내망에서도 나오고, 네트워크를 부르지 않는다.
+      kiBridge.fetchKiFactors(krCode).catch(() => null),
     ]);
     if (newsR.status === 'fulfilled') news.headlines = newsR.value;
     if (intraR.status === 'fulfilled') intraday = buildIntraday(intraR.value, '₩');
@@ -1230,6 +1233,7 @@ async function fetchMarket(resolved) {
     if (kiR.status === 'fulfilled' && kiR.value) ki = kiR.value;
     if (kqR.status === 'fulfilled' && kqR.value) kiQuote = kqR.value;
     if (kmR.status === 'fulfilled' && kmR.value) kiMacro = kmR.value;
+    if (kfR.status === 'fulfilled' && kfR.value) kiFactors = kfR.value;
 
     // KR_STOCKS 밖 종목은 USDT 무기한 계약이 없다. 없다는 사실을 적어 두지 않으면
     // 20배 레벨을 정규장 차트로 설계하게 되고, 그 순간 판정이 통째로 틀어진다.
@@ -1246,7 +1250,7 @@ async function fetchMarket(resolved) {
 
     // 실시간을 받았으면 시세 줄을 그것으로 바꾼다.
     //
-    // 이 줄은 16명 전원이 현재가로 읽는다. 원장 종가는 며칠 묵을 수 있고, 그
+    // 이 줄은 17명 전원이 현재가로 읽는다. 원장 종가는 며칠 묵을 수 있고, 그
     // 값으로 목표가·괴리·손익비를 논하면 판정이 통째로 틀어진다. 실시간이
     // 없으면(장 마감·키 없음·조회 실패) 종전대로 원장 종가 줄을 그대로 쓴다.
     {
@@ -1336,6 +1340,7 @@ async function fetchMarket(resolved) {
     ...(ki ? { ki } : {}),
     ...(kiQuote ? { kiQuote } : {}),
     ...(kiMacro ? { kiMacro } : {}),
+    ...(kiFactors ? { kiFactors } : {}),
   };
 }
 

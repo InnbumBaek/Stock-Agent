@@ -71,7 +71,8 @@ const DEFAULT_KI = {
   // 아무도 추적할 수 없다. 중앙은행 공식 통계로 바꾸는 스위치다.
   // 종목별이 아니라 런당 한 번 조회한다 — 매크로는 종목에 딸린 값이 아니다.
   macro: false,
-  macroCount: 60, // 100대 통계 중 앞에서 몇 개를 받을지
+  macroCount: 60,
+  factorWindow: 60, // 100대 통계 중 앞에서 몇 개를 받을지
 };
 
 // 저장소 배치상 server/ 의 두 단계 위가 저장소 루트다.
@@ -269,6 +270,62 @@ async function fetchKiCandles(codeOrSymbol, opts = {}) {
     '--days',
     String(Math.max(30, Number(cfg.candleDays || 200))),
   ]);
+}
+
+/**
+ * 논문 팩터 한 벌 (ki.factors/1).
+ *
+ * 원장의 일봉만으로 계산된다 — KIS·ECOS·FRED 를 쓰지 않으므로 사내망에서도
+ * 나온다. 그래서 `ki.enabled` 만 보면 되고 별도 스위치를 두지 않았다.
+ *
+ * 값과 함께 **논문·그 논문이 주장하는 것·주장하지 않는 것**이 온다. 셋을
+ * 갈라서 받는 것이 요점이다 — 팩터를 근거로 쓸 때 가장 흔한 사고는 논문이
+ * 말한 적 없는 것을 말했다고 읽는 것이다.
+ */
+async function fetchKiFactors(codeOrSymbol, opts = {}) {
+  return runKiJson('factors', codeOrSymbol, opts, (cfg, code) => [
+    'factors',
+    code,
+    '--window',
+    String(Math.max(20, Number(cfg.factorWindow || 60))),
+  ]);
+}
+
+/**
+ * 팩터를 프롬프트 줄로. 값·논문·한계를 **한 덩어리로 붙여** 낸다.
+ *
+ * 값만 주면 언어모델은 그 값을 아무 논문에나 갖다 붙인다. 값 바로 옆에
+ * 출처와 유보를 같이 두어야 그 셋이 떨어지지 않는다.
+ */
+function formatKiFactorLines(payload) {
+  if (!payload || !payload.ok || !Array.isArray(payload.factors)) return [];
+  const num = (v, u) => {
+    if (v === null || v === undefined || Number.isNaN(Number(v))) return null;
+    const n = Number(v);
+    const d = Math.abs(n) >= 100 ? 1 : Math.abs(n) >= 1 ? 2 : 4;
+    return `${n.toFixed(d)} ${u || ''}`.trim();
+  };
+  const out = [];
+  for (const f of payload.factors) {
+    const v = num(f.value, f.unit);
+    if (v === null) {
+      // 못 낸 값은 숨기지 않고 왜 못 냈는지 적는다. 빠진 줄은 아무도 안 묻는다.
+      out.push(`· ${f.name}: 계산 불가 — ${f.reason || '사유 미기재'}`);
+      continue;
+    }
+    out.push(`· ${f.name}: ${v}  (관측 ${f.n}일)`);
+    out.push(`    근거   ${f.citation}`);
+    out.push(`    주장   ${f.claim}`);
+    out.push(`    유보   ${f.limits}`);
+  }
+  const im = payload.impact_model;
+  if (im) {
+    out.push(`· 실행 시뮬레이션의 가정: ${im.assumption}`);
+    out.push(`    근거   ${im.citation}`);
+    if (im.also) out.push(`           ${im.also}`);
+    out.push(`    유보   ${im.limits}`);
+  }
+  return out;
 }
 
 /**
@@ -740,7 +797,7 @@ function formatKiPriceLine(candlesPayload, label) {
 /**
  * 실시간 시세 줄. 원장 종가 줄을 대신한다.
  *
- * 16명 전원이 이 한 줄을 현재가로 읽는다. 그래서 언제 잰 값인지를 반드시
+ * 17명 전원이 이 한 줄을 현재가로 읽는다. 그래서 언제 잰 값인지를 반드시
  * 같이 적는다 — 장 마감 후의 값을 장중 값으로 읽으면 판정이 통째로 틀어진다.
  *
  * @param {object|null} quotePayload  fetchKiQuote 의 반환값
@@ -870,9 +927,11 @@ module.exports = {
   krCodeOf,
   fetchKiFacts,
   fetchKiCandles,
+  fetchKiFactors,
   fetchKiQuote,
   fetchKiMacro,
   formatKiLines,
+  formatKiFactorLines,
   formatKiMacroLines,
   formatKiQuoteLine,
   formatKiMicroLines,

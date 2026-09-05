@@ -139,7 +139,7 @@ test('기존 13인은 원장 없이도 도는 역할 그대로다 (회귀 방지
     assert.ok(meta, `${id} 가 사라지면 안 된다`);
     assert.ok(!meta.requiresKi, `${id} 는 원장 없이도 돌아야 한다`);
   }
-  assert.equal(AGENTS.length, 16);
+  assert.equal(AGENTS.length, 17);
 });
 
 // --------------------------------------------------------- 분업 (핵심 계약)
@@ -318,7 +318,7 @@ function newsCtx() {
   return ctx;
 }
 
-test('16명 전원이 출처 규율을 받는다 (ACE 포함)', () => {
+test('17명 전원이 출처 규율을 받는다 (ACE 포함)', () => {
   const ctx = newsCtx();
   const missing = AGENTS.map((a) => a.id).filter(
     (id) => !buildPrompt(id, ctx).includes('[출처 규율')
@@ -369,7 +369,7 @@ test('헤드라인만 근거인 주장에는 미확인을 붙이라고 한다', 
 // ---------------------------------------------------------------------------
 // 거시 지표 — 한국은행 ECOS
 //
-// 매크로는 모두에게 그럴듯하게 읽히는 재료다. 전원에게 주면 16명이 같은 거시
+// 매크로는 모두에게 그럴듯하게 읽히는 재료다. 전원에게 주면 17명이 같은 거시
 // 서사를 반복하고 앙상블이 무너진다. DIANA(할인율)와 RED(가정 심문)만 본다.
 // ---------------------------------------------------------------------------
 
@@ -479,8 +479,105 @@ test('판정·토론은 깊은 모델, 재료 정리는 빠른 모델', () => {
   }
 });
 
-test('16명 전원이 모델을 배정받는다 — 빠뜨리면 조용히 기본값이 된다', () => {
+test('17명 전원이 모델을 배정받는다 — 빠뜨리면 조용히 기본값이 된다', () => {
   for (const a of AGENTS) {
     assert.ok(['opus', 'sonnet'].includes(modelFor(a.id)), `${a.id}: ${modelFor(a.id)}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 퀀트 데스크 — 논문을 읽고 **제안**한다. 판정하지 않는다.
+//
+// 이 자리의 실패 방식은 하나다. 논문이 말한 적 없는 것을 말했다고 읽고,
+// 그것을 숫자의 권위로 데스크에 넘기는 것. 아래가 그 경로를 막는다.
+// ---------------------------------------------------------------------------
+
+const { formatKiFactorLines } = require('../server/ki-bridge.js');
+
+function factorFixture() {
+  return {
+    ok: true,
+    schema: 'ki.factors/1',
+    factors: [
+      {
+        key: 'amihud', name: 'Amihud 비유동성', unit: '×1e6', value: 0.1234, n: 60,
+        paper: 'amihud2002',
+        citation: 'Amihud, Y. (2002) Illiquidity and stock returns. Journal of Financial Markets 5(1), 31-56.',
+        claim: '비유동적일수록 요구수익률이 높다',
+        limits: '일별 집계라 장중 충격은 못 본다', reason: null,
+      },
+      {
+        key: 'ivol', name: '고유변동성 (연율)', unit: '%', value: null, n: 0,
+        paper: 'ahxz2006', citation: 'Ang, A. et al. (2006) ...',
+        claim: '고유변동성이 높으면 이후 수익률이 낮았다',
+        limits: '시장모형 잔차다', reason: '원장에 시장지수가 없습니다',
+      },
+    ],
+    impact_model: {
+      assumption: '가격 충격은 주문량의 제곱근에 비례',
+      paper: 'athl2005', citation: 'Almgren, R. et al. (2005) ...',
+      limits: '미국 대형주 자료다',
+    },
+  };
+}
+
+test('팩터 줄은 값·근거·주장·유보를 한 덩어리로 낸다', () => {
+  const lines = formatKiFactorLines(factorFixture()).join('\n');
+  // 값 옆에 출처와 유보가 같이 있어야 셋이 떨어지지 않는다.
+  assert.match(lines, /Amihud 비유동성: 0\.1234/);
+  assert.match(lines, /근거\s+Amihud, Y\. \(2002\)/);
+  assert.match(lines, /주장\s+비유동적일수록/);
+  assert.match(lines, /유보\s+일별 집계라/);
+  // §3 이 쓰는 가정도 출처와 함께 나간다.
+  assert.match(lines, /제곱근에 비례/);
+  assert.match(lines, /Almgren, R\. et al\. \(2005\)/);
+});
+
+test('못 낸 팩터는 숨기지 않고 사유를 적는다', () => {
+  const lines = formatKiFactorLines(factorFixture()).join('\n');
+  // 빠진 줄은 아무도 묻지 않는다. 없으면 왜 없는지가 보여야 한다.
+  assert.match(lines, /고유변동성 \(연율\): 계산 불가 — 원장에 시장지수가 없습니다/);
+  assert.doesNotMatch(lines, /고유변동성 \(연율\): 0/);
+});
+
+test('팩터는 QUANT 에게만 간다', () => {
+  const market = { symbol: 'TEST', display: '테스트', kiFactors: factorFixture() };
+  const seen = AGENTS.map((a) => a.id).filter((id) =>
+    buildPrompt(id, { market }).includes('Amihud 비유동성')
+  );
+  assert.deepEqual(seen, ['quant'], `팩터를 본 역할: ${seen.join(',')}`);
+});
+
+test('QUANT 는 판정하지 말라는 지시를 받는다', () => {
+  const market = { symbol: 'TEST', display: '테스트', kiFactors: factorFixture() };
+  const p = buildPrompt('quant', { market });
+  assert.match(p, /판정을 내리는 자리가 아니다/);
+  assert.match(p, /매수·매도·목표가를 말하지 마라/);
+  // 팩터를 스스로 다시 계산하거나, 기억에서 논문을 꺼내 오면 추적이 끊긴다.
+  assert.match(p, /팩터를 네가 다시 계산하지 마라/);
+  assert.match(p, /논문을 네 기억에서 새로 꺼내 인용하지 마라/);
+});
+
+test('퀀트 제안은 판단을 바꾸는 다섯 자리에만 간다', () => {
+  const ctx = { market: { symbol: 'TEST', display: '테스트' }, quantReport: '제안 본문' };
+  const got = AGENTS.map((a) => a.id).filter((id) =>
+    buildPrompt(id, ctx).includes('퀀트 데스크 제안')
+  );
+  assert.deepEqual(got, ['diana', 'flow', 'red', 'ace', 'pm']);
+});
+
+test('퀀트 제안은 제안이지 판정이 아니라고 명시된다', () => {
+  const ctx = { market: { symbol: 'TEST', display: '테스트' }, quantReport: '제안 본문' };
+  for (const id of ['ace', 'pm', 'flow']) {
+    const p = buildPrompt(id, ctx);
+    assert.match(p, /판정 아님/, `${id}`);
+    assert.match(p, /동의하지 않으면 그렇게 적어라/, `${id}`);
+  }
+});
+
+test('제안이 없으면 어디에도 붙지 않는다', () => {
+  const ctx = { market: { symbol: 'TEST', display: '테스트' } };
+  for (const a of AGENTS) {
+    assert.ok(!buildPrompt(a.id, ctx).includes('퀀트 데스크 제안'), a.id);
   }
 });

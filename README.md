@@ -18,7 +18,7 @@
 ──────────────────────────────────────────       ──────────────
 KRX·DART 공식 API 로 사실을 잽니다
         ↓
-에이전트 16명이 그 사실을 보고 토론해 판정합니다
+에이전트 17명이 그 사실을 보고 토론해 판정합니다
         ↓
 측정값 §1~§4 + 에이전트 판정 §5 를 한 리포트로  →  사람이 읽고 결정합니다
 ```
@@ -38,7 +38,7 @@ KRX·DART 공식 API 로 사실을 잽니다
   ┌───────────────────────────────────────────────────┐
   │                                                   ▼
 [stock-monitor]                              [trading-floor]
- KRX·DART API                                 에이전트 16명
+ KRX·DART API                                 에이전트 17명
       ↓                                             │
   ki.sqlite ──▶ facts ──▶ ki-bridge.js ──▶ 프롬프트 │
    원장                   FLOW·FILING·RED·DIANA·GUARD·SAFE·ACE
@@ -149,7 +149,7 @@ node server/export-brief.js --run --symbols 000250,058970 --mode algo
 # 주가 모니터링 — 회수 판단 리포트
 cd stock-monitor
 python ki_monitor.py daily      # 적재 → 리포트 (에이전트 절 없음)
-python ki_monitor.py selftest   # 120개 (키 불필요)
+python ki_monitor.py selftest   # 125개 (키 불필요)
 ```
 
 ```bash
@@ -157,7 +157,7 @@ python ki_monitor.py selftest   # 120개 (키 불필요)
 cd trading-floor
 node server/server.js           # http://localhost:8000
 # 데모 모드(claude CLI 없이): http://localhost:8000/?demo=1
-npm test                        # 193개
+npm test                        # 200개
 ```
 
 `--with-agents` 없이 만든 리포트는 통합 이전 원본 코드의 출력과 **바이트 단위로 같습니다.**

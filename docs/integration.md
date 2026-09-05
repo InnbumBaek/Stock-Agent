@@ -14,7 +14,7 @@
 ─────────────────────────────────────────    ──────────────
 KRX·DART 공식 API 로 사실을 잰다
         ↓
-에이전트 16명이 그 사실을 보고 토론해 판정한다
+에이전트 17명이 그 사실을 보고 토론해 판정한다
         ↓
 측정값 §1~§4 + 에이전트 판정 §5 를 한 리포트로 낸다  →  사람이 읽고 결정한다
 ```
@@ -73,7 +73,7 @@ Stock-Agent/
   ┌───────────────────────────────────────────────────────┐
   │                                                       ▼
 [stock-monitor]                                    [trading-floor]
- KRX·DART API                                       에이전트 16명
+ KRX·DART API                                       에이전트 17명
       ↓                                                   │
   ki.sqlite ──▶ facts (JSON) ──▶ ki-bridge.js ──▶ 프롬프트 │
    원장                     FLOW·FILING·RED·DIANA·GUARD·SAFE·ACE
@@ -294,7 +294,7 @@ python ki_monitor.py quote --code 000660 --no-orderbook   # 호가 생략 (호�
 
 | 값 | 받는 쪽 | 왜 |
 |---|---|---|
-| **현재가·등락률** (시세 줄) | **16명 전원** | 이 줄을 전원이 현재가로 읽는다. 신선도 문제이지 새 업무가 아니다 |
+| **현재가·등락률** (시세 줄) | **17명 전원** | 이 줄을 전원이 현재가로 읽는다. 신선도 문제이지 새 업무가 아니다 |
 | **호가·잔량·스프레드·불균형** | **FLOW 만** | 방향이 아니라 '지금 이 가격에 얼마나 나가는가'다. 유동성·체결 담당의 재료 |
 
 ```
@@ -355,7 +355,7 @@ SK하이닉스 ₩186,200 (+0.65%) · 한국투자증권 KIS 장중 실시간 ·
 | **1차** | KRX 한국거래소 · DART 금융감독원 · 한국은행 ECOS · 한국투자증권 KIS | 근거로 삼아도 된다 |
 | **참고** | 구글 뉴스 RSS 헤드라인 · 공포탐욕지수 | "이런 이야기가 돌고 있다"까지 |
 
-`agents.js` 의 `SOURCE_RULE` 이 **16명 전원**의 프롬프트에 붙는다(ACE 는 조기 반환
+`agents.js` 의 `SOURCE_RULE` 이 **17명 전원**의 프롬프트에 붙는다(ACE 는 조기 반환
 경로라 별도로 붙인다). 규칙은 셋이다.
 
 1. 숫자를 말할 때 어디서 온 값인지 함께 적는다.
@@ -416,7 +416,7 @@ python ki_monitor.py macro --indent 2
 | **RED** (가정 심문) | "이 판정이 **어떤 금리 국면을 전제**하고 있는가"가 그 역할이다 |
 
 둘은 같은 숫자를 다른 일에 쓴다. 나머지에게 주지 않는 이유는 분업이다 — 매크로는
-모두에게 그럴듯하게 읽히는 재료라, 전원에게 주면 16명이 같은 거시 서사를 반복하고
+모두에게 그럴듯하게 읽히는 재료라, 전원에게 주면 17명이 같은 거시 서사를 반복하고
 앙상블이 무너진다. ACE 는 DIANA 의 리포트로 그 판단을 받는다.
 
 `ki.macro` 를 켜야 돌고, **종목이 아니라 시장 배경이라 런당 한 번만** 조회한다.
@@ -577,7 +577,7 @@ JSON 을 한 벌 더 쓸 뿐이고, 여기서 새로 계산하거나 요약하�
 ### 5.1-b 판정 성적표 — `server/scorecard.js` → `agent.scorecard/1`
 
 이 데스크는 매주 의견을 만든다. 그런데 그 의견이 맞았는지 아무도 채점하지 않으면
-회의에서 16명의 말이 전부 같은 무게로 읽힌다. **이것이 통합 이후 가장 큰 구멍이었다.**
+회의에서 17명의 말이 전부 같은 무게로 읽힌다. **이것이 통합 이후 가장 큰 구멍이었다.**
 
 부품은 이미 있었다. `stats.js` 가 확신도 캘리브레이션을 계산하고, `decisions.json` 에
 판정이 쌓이고, 사이드카에 목표가·손절가가 남는다. 셋이 서로 연결돼 있지 않았을 뿐이다.
@@ -634,7 +634,7 @@ node server/export-brief.js --max-age-hours 24 # 하루 지난 분석은 뺀다
 | `--out <경로>` | 기본 `reports/agent-brief.json` |
 | `--max-age-hours N` | 수집 시 N시간보다 오래된 건 제외 |
 
-**`--run` 없이는 절대 분석을 돌리지 않는다.** 실전 런은 에이전트 최대 16명 × claude opus 라
+**`--run` 없이는 절대 분석을 돌리지 않는다.** 실전 런은 에이전트 최대 17명 × claude opus 라
 비용이 크다. 실수로 돌아가면 안 된다.
 
 `stdout` 은 **사람용 진행 상황**이고 결과는 파일로 쓴다 — `facts` 와 반대다.
@@ -739,11 +739,50 @@ python ki_monitor.py report --market KOSPI --with-agents
 
 ---
 
+## 7-b. `ki.factors/1` — 논문 팩터
+
+`python ki_monitor.py factors <코드>... [--window 60] [--indent N]`
+
+**원장의 일봉만** 쓴다. KIS·ECOS·FRED 를 부르지 않으므로 사내 방화벽 안에서도
+나오고, 네트워크 호출이 0이다(`selftest` 가 소스에서 이를 강제한다).
+
+```jsonc
+{
+  "ok": true, "schema": "ki.factors/1", "code": "000660", "window": 60,
+  "factors": [
+    { "key": "amihud", "name": "Amihud 비유동성", "unit": "×1e6",
+      "value": 0.1234, "n": 60, "paper": "amihud2002",
+      "citation": "Amihud, Y. (2002) ... doi:10.1016/S1386-4181(01)00024-6",
+      "claim":  "논문이 주장한 것",
+      "limits": "논문이 주장하지 않는 것 · 이 종목에 적용할 때의 유보",
+      "reason": null }
+  ],
+  "papers": { "amihud2002": { "authors": "...", "doi": "..." } },
+  "impact_model": { "assumption": "...", "paper": "athl2005", "citation": "...", "limits": "..." }
+}
+```
+
+지켜야 할 것.
+
+- **`value` 가 `null` 이면 `reason` 이 반드시 있다.** 없는 값을 만들지 않는다 —
+  Roll 추정량은 자기공분산이 양수면 정의되지 않고, 고유변동성은 시장지수가 없으면
+  총변동성으로 대신하지 않는다. 대신했다면 그 인용이 거짓이 된다.
+- **`paper` 는 `stock-monitor/.papers.json` 에 실재해야 한다.** `selftest` 가 검사한다.
+- **판정 어휘를 담지 않는다.** 매수·매도·저평가·목표가는 여기 없다 (`selftest` 검사).
+- 논문 갱신·재대조: `python docs/fetch_papers.py [--write]` (인터넷 필요).
+
+받는 쪽은 `ki-bridge.js` 의 `fetchKiFactors()` → `formatKiFactorLines()` 이고,
+**퀀트 데스크(QUANT) 한 명에게만** 간다. QUANT 는 그것을 읽고 *다른 에이전트에게
+어떻게 볼지 제안*하며, 그 제안은 DIANA·FLOW·RED·ACE·PM 다섯 자리에 "판정 아님"
+라벨과 함께 붙는다.
+
+---
+
 ## 8. 검증
 
 ```bash
-cd stock-monitor  && python ki_monitor.py selftest    # 120개 (기존 64 + 통합 53)
-cd trading-floor  && npm test                          # 193개 (기존 68 + 통합 125)
+cd stock-monitor  && python ki_monitor.py selftest    # 125개 (기존 64 + 통합 53)
+cd trading-floor  && npm test                          # 200개 (기존 68 + 통합 125)
 ```
 
 통합이 지키기로 한 것 중 **테스트가 실제로 강제하는 것**:

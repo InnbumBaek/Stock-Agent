@@ -65,14 +65,18 @@ const RISK_ARBITER_IDS = new Set(['neutral']);
 
 const MODES = {
   algo: {
+    // 방법론 데스크 — 애널리스트보다 **먼저** 돈다. 팩터를 어떻게 볼지 정해
+    // 놓고 시작해야, 뒤에서 각자 다른 기준으로 같은 값을 읽는 일이 없다.
+    // 회수 판단(algo)에만 붙인다 — 스캘핑에는 논문 팩터가 재료가 아니다.
+    quant: true,
     analysts: ANALYST_IDS,
     debate: DEBATE_ORDER,   // 실행 시 debatePlan 으로 덮어씁니다
     scalp: [],
     risk: RISK_ORDER, // ACE 1차 판정 → 리스크 위원회 → PM 최종 승인
     pm: true,
   },
-  scalp: { analysts: ['taro', 'vibe'], debate: [], scalp: SCALP_ORDER, risk: [], pm: false },
-  attack: { analysts: ['taro', 'vibe'], debate: [], scalp: SCALP_ORDER, risk: [], pm: false },
+  scalp: { quant: false, analysts: ['taro', 'vibe'], debate: [], scalp: SCALP_ORDER, risk: [], pm: false },
+  attack: { quant: false, analysts: ['taro', 'vibe'], debate: [], scalp: SCALP_ORDER, risk: [], pm: false },
 };
 const REPORTS_DIR = path.join(__dirname, '..', 'reports');
 
@@ -489,6 +493,7 @@ class Engine extends EventEmitter {
     let market = null;
     const analystResults = []; // [{id, name, bubble, report}] — 렌더/저장용
     const analystReports = {}; // {taro,diana,nova,vibe: reportString} — agents.js 프롬프트 주입용
+    let quantReport = null;    // 퀀트 데스크의 방법론 제안 — 뒤 단계 전원이 받는다
     const debateLog = [];
     const scalpResults = []; // [{id, name, bubble, report}] — 스캘핑 데스크 렌더/저장용
     const scalpReports = {}; // {blitz, guard: reportString} — agents.js 프롬프트 주입용
@@ -563,6 +568,27 @@ class Engine extends EventEmitter {
       // riskmath.js가 없으면 null이고 프롬프트는 기존 그대로다.
       const riskInfo = this._buildRiskInfo(market, null);
 
+      // 1.5) 방법론 데스크 — 논문 팩터를 어떻게 볼지 먼저 정한다.
+      //
+      // 원장 실측이 없으면(코인·해외주식·꺼짐) filterByKi 가 걸러내므로 이
+      // 단계 자체가 없다. 비용이 늘지 않는다.
+      if (plan.quant && filterByKi(['quant'], market).length) {
+        this._log('── 퀀트 데스크 (방법론) ──', 'stage');
+        this._emit({ type: 'agent:start', id: 'quant' });
+        try {
+          const res = await runAgent('quant', { market, mode }, { mock });
+          quantReport = res.report;
+          this._emit({
+            type: 'agent:done', id: 'quant',
+            bubble: res.bubble, report: res.report,
+          });
+        } catch (e) {
+          // 방법론 제안이 없어도 나머지는 그대로 돈다. 없으면 없는 대로 간다.
+          this._log(`> 퀀트 데스크 실패: ${e && e.message ? e.message : e}`, 'sys');
+          this._emit({ type: 'agent:error', id: 'quant' });
+        }
+      }
+
       // 2) 애널리스트 병렬 (Promise.allSettled) — 모드별 인원
       this._log('── 애널리스트 팀 분석 ──', 'stage');
       const analystIds = filterByKi(plan.analysts, market);
@@ -607,7 +633,7 @@ class Engine extends EventEmitter {
         this._emit({ type: 'agent:start', id, turn });
         const res = await runAgent(
           id,
-          { market, analystReports, debateLog, mode },
+          { market, analystReports, debateLog, quantReport, mode },
           { mock }
         );
         this._emit({
@@ -634,7 +660,7 @@ class Engine extends EventEmitter {
         try {
           const res = await runAgent(
             id,
-            { market, analystReports, debateLog, scalpReports, riskInfo, mode },
+            { market, analystReports, debateLog, scalpReports, riskInfo, quantReport, mode },
             { mock }
           );
           this._emit({
@@ -667,7 +693,7 @@ class Engine extends EventEmitter {
       this._emit({ type: 'agent:start', id: 'ace' });
       const dec = await runAgent(
         'ace',
-        { market, analystReports, debateLog, scalpReports, memory, mode },
+        { market, analystReports, debateLog, scalpReports, memory, quantReport, mode },
         { mock }
       );
       this._emit({
@@ -708,6 +734,7 @@ class Engine extends EventEmitter {
             {
               market,
               analystReports,
+              quantReport,
               debateLog,
               traderPlan,
               riskReports,

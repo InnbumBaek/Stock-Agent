@@ -9,12 +9,14 @@ const { AGENTS, extractJson, runAgent, buildPrompt } = require('../server/agents
 // ---------------------------------------------------------------------------
 // AGENTS 메타
 // ---------------------------------------------------------------------------
-test('AGENTS: 16종 id·순서·필드 존재', () => {
+test('AGENTS: 17종 id·순서·필드 존재', () => {
+  // 통합으로 네 역할이 늘었다 — QUANT 가 맨 앞이다 (방법론 제안).
   // 통합으로 세 역할이 늘었다 — FLOW(유동성·체결) · FILING(공시·자본구조) ·
   // RED(가정 반대심문). 셋 다 원장 실측이 있어야만 도는 역할이라 requiresKi 다.
   // 기존 13인의 id·상대순서는 그대로여야 한다.
   const ids = AGENTS.map((a) => a.id);
   assert.deepEqual(ids, [
+    'quant',
     'taro',
     'diana',
     'flow',
@@ -33,7 +35,7 @@ test('AGENTS: 16종 id·순서·필드 존재', () => {
     'pm',
   ]);
   // 기존 13인은 원장 없이도 도는 역할 그대로다
-  const legacy = ids.filter((id) => !['flow', 'filing', 'red'].includes(id));
+  const legacy = ids.filter((id) => !['quant', 'flow', 'filing', 'red'].includes(id));
   assert.deepEqual(legacy, [
     'taro', 'diana', 'nova', 'vibe', 'bull', 'bear', 'blitz', 'guard',
     'risky', 'neutral', 'safe', 'ace', 'pm',
@@ -94,7 +96,7 @@ const mockContext = {
   debateLog: [{ id: 'bull', bubble: '매수 유효', report: '상방 여력 큼' }],
 };
 
-test('mock runAgent: 13개 id 전부 bubble·긴 report 존재', async () => {
+test('mock runAgent: 전원 bubble·긴 report 존재', async () => {
   for (const a of AGENTS) {
     const res = await runAgent(a.id, mockContext, { mock: true });
     assert.ok(typeof res.bubble === 'string' && res.bubble.length > 0, `${a.id} bubble`);

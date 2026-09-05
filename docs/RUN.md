@@ -10,7 +10,7 @@
 ```
 [stock-monitor]  한국거래소·금감원에서 숫자를 받아 원장에 쌓는다      (Python)
         ↓  숫자를 넘긴다
-[trading-floor]  에이전트 16명이 그 숫자를 보고 토론해 판정한다        (Node)
+[trading-floor]  에이전트 17명이 그 숫자를 보고 토론해 판정한다        (Node)
         ↓  판정을 돌려준다
 [stock-monitor]  숫자 §1~§4 + 판정 §5 를 합쳐 HTML 리포트 한 장을 만든다
         ↓
@@ -74,10 +74,10 @@ pip install pandas numpy scipy requests lxml
 
 ```bash
 cd stock-monitor
-python ki_monitor.py selftest        # 120개 통과해야 정상
+python ki_monitor.py selftest        # 125개 통과해야 정상
 
 cd ../trading-floor
-npm test                             # 193개 통과해야 정상
+npm test                             # 200개 통과해야 정상
 ```
 
 둘 다 통과하면 코드는 정상입니다. 여기서 실패하면 아래로 진행하지 마십시오.
@@ -317,7 +317,7 @@ python ki_monitor.py facts --code 000660 --with-disclosures --indent 2
 
 ---
 
-## 에이전트 16명
+## 에이전트 17명
 
 | 방 | 에이전트 |
 |---|---|
