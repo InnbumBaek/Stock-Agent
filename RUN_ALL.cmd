@@ -39,6 +39,32 @@ set LOG=%~dp0logs\%STAMP%-%LOGNAME%.log
 where python >nul 2>&1
 if errorlevel 1 (set PY=py) else (set PY=python)
 
+rem ---------------------------------------------------------------
+rem  등록된 자동 실행이 옛 경로를 가리키면 여기서 조용히 고칩니다.
+rem
+rem  작업 스케줄러에는 파일의 전체 경로가 박힙니다. 폴더를 옮기거나
+rem  실행기 이름이 바뀌면 그 경로가 어긋나는데, 어긋난 채로도 오류가
+rem  안 납니다 - 그냥 08:50 에 아무 일도 일어나지 않습니다. 월요일
+rem  아침에 리포트가 없는 것으로만 알게 됩니다.
+rem
+rem  그래서 돌릴 때마다 확인하고, 어긋나 있으면 다시 등록합니다.
+rem  등록한 적이 없으면 아무것도 하지 않습니다 - 묻지도 않은 자동
+rem  실행을 몰래 걸어 두지는 않습니다.
+rem ---------------------------------------------------------------
+schtasks /Query /TN "StockAgent-Morning" >nul 2>&1
+if errorlevel 1 goto :sched_done
+schtasks /Query /TN "StockAgent-Morning" /FO LIST /V 2>nul | find /I "%~dp0RUN_ALL.cmd" >nul
+if not errorlevel 1 goto :sched_done
+schtasks /Create /TN "StockAgent-Morning" /TR "\"%~dp0RUN_ALL.cmd\" morning" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 08:50 /F >nul 2>&1
+schtasks /Create /TN "StockAgent-AfterClose" /TR "\"%~dp0RUN_ALL.cmd\" close" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 16:10 /F >nul 2>&1
+if errorlevel 1 (
+  call :say "     [알림] 자동 실행이 옛 경로를 가리킵니다. 다시 등록하지 못했습니다."
+  call :say "            SCHEDULE.cmd 를 관리자 권한으로 한 번 열어 주십시오."
+) else (
+  call :say "     자동 실행이 옛 경로를 가리켜 다시 등록했습니다."
+)
+:sched_done
+
 rem  스케줄러가 부르는 두 갈래는 사람에게 물어보지 않고 곧장 갑니다.
 if /I "%MODE%"=="morning" goto :auto_morning
 if /I "%MODE%"=="close" goto :auto_close
