@@ -106,6 +106,35 @@ function kiMicroLines(market, agentId) {
   }
 }
 
+// 출처 규율 — 무엇을 근거로 삼을 수 있는가.
+//
+// 이 데스크의 재료는 등급이 다르다. 공공기관 API 로 잰 값과 언론사 제목을
+// 같은 무게로 읽으면, 리포트에서 "뉴스에서 봤다"가 "실측했다"처럼 읽힌다.
+// 회의에서 그 구분이 사라지는 것이 이 시스템의 가장 조용한 실패다.
+//
+// 등급을 프롬프트에 명시하고, 주장마다 어느 등급에 기댔는지 밝히게 한다.
+const SOURCE_RULE = [
+  '[출처 규율 — 반드시 지켜라]',
+  '  네가 받은 재료는 신뢰 등급이 다르다.',
+  '',
+  '  1차 (근거로 삼아도 된다)',
+  '    · KRX 한국거래소 공식 API — 시세·거래량·시가총액',
+  '    · DART 금융감독원 전자공시 — 재무·지분·사채·공시 원문',
+  '    · 한국은행 ECOS — 금리·환율·경기 등 중앙은행 공식 통계',
+  '    · 한국투자증권 KIS — 실시간 현재가·호가',
+  '',
+  '  참고 (근거로 삼지 마라)',
+  '    · 언론 헤드라인 — 제목만 받은 것이고 본문·사실관계를 확인하지 않았다.',
+  '      "이런 이야기가 돌고 있다"까지만 말할 수 있다.',
+  '    · 센티먼트 지수 — 군중 심리의 대리지표일 뿐 사실이 아니다.',
+  '',
+  '  규칙',
+  '    · 숫자를 말할 때는 어디서 온 값인지 함께 적어라.',
+  '    · 재료에 없는 숫자를 네 기억에서 꺼내 쓰지 마라. 학습 시점에 멈춘 값이고,',
+  '      그것이 틀렸을 때 아무도 추적할 수 없다. 모르면 "재료에 없다"고 적어라.',
+  '    · 헤드라인만 근거인 주장에는 반드시 "미확인"이라고 붙여라.',
+].join('\n');
+
 function kiLines(market, agentId) {
   if (!market || !market.ki || !market.krCode) return [];
   let cfg;
@@ -542,18 +571,31 @@ function buildPrompt(id, context = {}) {
         '리픽싱 하한은 가정값이다. 그 가정에 기대는 결론에는 반드시 단서를 달아라.'
     );
   } else if (id === 'nova') {
-    parts.push('[최신 뉴스 헤드라인]');
+    parts.push('[언론 헤드라인 — 구글 뉴스 RSS · 참고 등급]');
     parts.push(formatHeadlines((market.news || {}).headlines, true));
     parts.push('');
-    parts.push('위 뉴스 흐름이 가격에 미칠 영향을 분석하라.');
+    parts.push(
+      '위 뉴스 흐름이 가격에 미칠 영향을 분석하라. 다만 이것은 **제목만 받은 것**이다. ' +
+        '본문도, 원 출처도, 사실관계도 확인하지 않았다. 그러므로 ' +
+        '"이런 이야기가 돌고 있다"까지만 말하고, 사실로 단정하지 마라.\n' +
+        '기업에 실제로 무슨 일이 있었는지는 DART 공시가 1차 출처다 — ' +
+        '헤드라인이 공시와 어긋나면 공시를 믿어라.\n' +
+        '헤드라인에 없는 사건을 네 기억에서 꺼내 보태지 마라. 그 순간 이 절은 ' +
+        '추적할 수 없는 문장이 된다.'
+    );
   } else if (id === 'vibe') {
     parts.push('[센티먼트 지표]');
     parts.push(lines((market.sentiment || {}).lines));
     parts.push('');
-    parts.push('[뉴스 제목]');
+    parts.push('[언론 헤드라인 — 제목만 · 참고 등급]');
     parts.push(formatHeadlines((market.news || {}).headlines, false));
     parts.push('');
-    parts.push('위 심리·여론 데이터를 근거로 투자 심리를 분석하라.');
+    parts.push(
+      '위 심리·여론 데이터로 투자 심리를 분석하라. 이 재료는 전부 참고 등급이다 — ' +
+        '심리 지표는 군중의 온도이지 사실이 아니고, 헤드라인은 제목뿐이다.\n' +
+        '심리를 근거로 가격의 방향을 단정하지 마라. 네가 낼 수 있는 것은 ' +
+        '"지금 시장이 이 종목을 어떻게 느끼고 있는가"까지다.'
+    );
   } else if (id === 'bull' || id === 'bear') {
     const stance =
       id === 'bull'
@@ -825,6 +867,8 @@ function buildPrompt(id, context = {}) {
     parts.push(NUMERIC_LEVEL_RULE);
     parts.push(minRRRule(attack));
     parts.push('');
+    parts.push(SOURCE_RULE);
+    parts.push('');
     parts.push(BRIEFING_RULE);
     parts.push('');
     parts.push(hasScalp ? (attack ? OUTPUT_ACE_ATTACK : OUTPUT_ACE) : OUTPUT_ACE_CORE);
@@ -837,6 +881,8 @@ function buildPrompt(id, context = {}) {
     parts.push(kiFacts.join('\n'));
   }
 
+  parts.push('');
+  parts.push(SOURCE_RULE);
   parts.push('');
   parts.push(BRIEFING_RULE);
   parts.push('');

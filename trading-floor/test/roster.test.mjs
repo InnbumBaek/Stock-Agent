@@ -302,3 +302,66 @@ test('FLOW 는 호가와 실행 시뮬레이션을 함께 본다', () => {
   assert.ok(hasBlock(p, '[실행 시뮬레이션'));
   assert.ok(p.includes('1호가만 본 값'), '한계도 함께 가야 한다');
 });
+
+// ---------------------------------------------------------------------------
+// 출처 규율 — 무엇을 근거로 삼을 수 있는가
+//
+// 공공기관 API 로 잰 값과 언론사 제목이 같은 무게로 프롬프트에 들어가면,
+// 리포트에서 "뉴스에서 봤다"가 "실측했다"처럼 읽힌다. 회의에서 그 구분이
+// 사라지는 것이 이 시스템의 가장 조용한 실패다.
+// ---------------------------------------------------------------------------
+
+function newsCtx() {
+  const ctx = CTX();
+  ctx.market.news = { headlines: [{ title: '검증용 기사 제목', age: '1시간 전' }] };
+  ctx.market.sentiment = { lines: ['공포탐욕지수 45'] };
+  return ctx;
+}
+
+test('16명 전원이 출처 규율을 받는다 (ACE 포함)', () => {
+  const ctx = newsCtx();
+  const missing = AGENTS.map((a) => a.id).filter(
+    (id) => !buildPrompt(id, ctx).includes('[출처 규율')
+  );
+  assert.deepEqual(missing, [], `규율이 빠진 역할: ${missing.join(', ')}`);
+});
+
+test('출처 규율이 1차와 참고를 나눈다', () => {
+  const p = buildPrompt('ace', newsCtx());
+  assert.ok(p.includes('1차 (근거로 삼아도 된다)'));
+  assert.ok(p.includes('참고 (근거로 삼지 마라)'));
+  // 1차에는 공공기관·중앙은행만 온다
+  for (const s of ['KRX 한국거래소', 'DART 금융감독원', '한국은행 ECOS', '한국투자증권 KIS']) {
+    assert.ok(p.includes(s), `1차 출처에 ${s} 가 없다`);
+  }
+});
+
+test('기억에서 숫자를 꺼내 쓰지 말라고 지시한다', () => {
+  // 언어모델이 학습 시점의 값을 꺼내 쓰면 아무도 추적할 수 없다.
+  const p = buildPrompt('diana', newsCtx());
+  assert.ok(p.includes('네 기억에서 꺼내 쓰지 마라'));
+  assert.ok(p.includes('재료에 없다'));
+});
+
+test('언론 헤드라인은 참고 등급으로 강등돼 있다', () => {
+  const nova = buildPrompt('nova', newsCtx());
+  assert.ok(nova.includes('참고 등급'), 'NOVA 의 뉴스 블록에 등급 라벨이 없다');
+  assert.ok(nova.includes('제목만 받은 것'), '무엇을 못 봤는지 밝혀야 한다');
+  assert.ok(nova.includes('사실로 단정하지 마라'));
+  // 공시와 어긋나면 공시를 믿으라는 우선순위가 있어야 한다
+  assert.ok(nova.includes('DART 공시가 1차 출처'));
+
+  const vibe = buildPrompt('vibe', newsCtx());
+  assert.ok(vibe.includes('참고 등급'));
+  assert.ok(vibe.includes('사실이 아니고'), '심리 지표의 성격을 밝혀야 한다');
+});
+
+test('뉴스를 지우지는 않는다 — 여론의 온도는 그 자체로 정보다', () => {
+  const nova = buildPrompt('nova', newsCtx());
+  assert.ok(nova.includes('검증용 기사 제목'), '헤드라인 자체는 그대로 실려야 한다');
+});
+
+test('헤드라인만 근거인 주장에는 미확인을 붙이라고 한다', () => {
+  const p = buildPrompt('bull', newsCtx());
+  assert.ok(p.includes('미확인'));
+});

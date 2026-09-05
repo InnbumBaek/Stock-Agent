@@ -3,8 +3,8 @@
 """
 ki_monitor.py — 상장 포트폴리오사 회수 판단 리포트 자동화 (단일 파일)
 
-한국거래소 KRX Open API · 한국투자증권 KIS Open API · DART 전자공시
-세 개만 사용합니다.
+한국거래소 KRX Open API · 한국투자증권 KIS Open API · DART 전자공시 ·
+한국은행 ECOS · FRED — 전부 공공기관·중앙은행의 1차 출처입니다.
 설정 파일도, 패키지 폴더도 없습니다. 이 파일 하나면 전부 돌아갑니다.
 
   python ki_monitor.py selftest              # 계산 검증 (키 불필요)
@@ -14,6 +14,7 @@ ki_monitor.py — 상장 포트폴리오사 회수 판단 리포트 자동화 (�
   python ki_monitor.py report
   python ki_monitor.py watch                 # 장중 폴링 알림 (KIS 실시간)
   python ki_monitor.py quote --code 000660   # 실시간 시세 JSON (통합용)
+  python ki_monitor.py macro                 # 한국은행 100대 통계 JSON (통합용)
   python ki_monitor.py init                  # .env / positions.csv 뼈대 생성
 
 필요 패키지:  pandas numpy scipy requests jinja2 weasyprint lxml
@@ -858,6 +859,28 @@ def krx_macro_daily(bas_dd: str) -> pd.DataFrame:
 #   · 연준(Federal Reserve Board) 산출 → 미국 정부 저작물, 재배포 제한 없음
 #   · 제3자 산출(Nasdaq · ICE · Cboe) → FRED 로 받아볼 수는 있으나 저작권은 그들 것
 # 제3자 계열은 --include-restricted 로 명시적으로 켜야만 들어옵니다.
+# 한국은행 경제통계시스템(ECOS) — 중앙은행 공식 통계입니다.
+#
+# 통계표코드(722Y001 …)를 하드코딩하지 않습니다. 출처마다 설명이 엇갈려
+# 확인 없이 박아 두면 엉뚱한 계열을 '기준금리'라고 부르게 됩니다. 대신
+# KeyStatisticList(100대 통계)를 씁니다 — 코드를 몰라도 되고, 응답이
+# 통계명·단위·시점을 스스로 들고 옵니다.
+#
+# 요청 형식:  /api/{서비스}/{인증키}/json/kr/{시작건수}/{종료건수}
+# 응답 필드:  CLASS_NAME(그룹) KEYSTAT_NAME(통계명) DATA_VALUE(값)
+#             CYCLE(시점) UNIT_NAME(단위)
+# DART 공시 원문 뷰어. 접수번호를 붙이면 그 공시 원문으로 갑니다.
+# 제목만으로는 발행조건·전환가·리픽싱 조항을 알 수 없습니다.
+DART_VIEWER = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo="
+
+ECOS = {
+    "base_url": "https://ecos.bok.or.kr/api",
+    "verified": False,      # 실응답 1회 대조 전까지 False
+    "allowed": {"key_stats": "KeyStatisticList"},   # 읽기 전용. 조회 하나뿐입니다
+    "lang": "kr",
+    "max_rows": 100,
+}
+
 FRED = {
     "base_url": "https://api.stlouisfed.org/fred/series/observations",
     "public": {          # 연준·미국 정부 산출 — 재배포 제한 없음
@@ -873,6 +896,47 @@ FRED = {
                       "ICE Data Indices, LLC"),
     },
 }
+
+
+def ecos_available() -> bool:
+    return has_key("ECOS_API_KEY")
+
+
+def ecos_key_stats(limit: int = 100) -> list[dict]:
+    """한국은행 100대 통계지표. 실패하면 예외를 올립니다(부르는 쪽이 감쌉니다).
+
+    통계명을 그대로 들고 옵니다 — 이쪽에서 이름을 붙이면 그 순간
+    '한국은행이 이렇게 말했다'가 아니라 '우리가 이렇게 불렀다'가 됩니다."""
+    requests = _requests()
+    n = max(1, min(int(limit or 100), ECOS["max_rows"]))
+    url = (f"{ECOS['base_url']}/{ECOS['allowed']['key_stats']}/"
+           f"{api_key('ECOS_API_KEY')}/json/{ECOS['lang']}/1/{n}")
+    r = requests.get(url, timeout=20)
+    r.raise_for_status()
+    body = r.json()
+    # ECOS 는 HTTP 200 에 실패를 담아 보냅니다.
+    if "RESULT" in body:
+        res = body["RESULT"]
+        raise RuntimeError(f"ECOS {res.get('CODE', '')}: {res.get('MESSAGE', '')}")
+    node = body.get(ECOS["allowed"]["key_stats"]) or {}
+    rows = node.get("row") or []
+    out = []
+    for r_ in rows:
+        name = str(r_.get("KEYSTAT_NAME", "")).strip()
+        if not name:
+            continue
+        try:
+            val = float(str(r_.get("DATA_VALUE", "")).replace(",", ""))
+        except (TypeError, ValueError):
+            val = None          # 값이 없으면 없는 것입니다. 0 으로 채우지 않습니다
+        out.append({
+            "group": str(r_.get("CLASS_NAME", "")).strip() or None,
+            "name": name,
+            "value": val,
+            "unit": str(r_.get("UNIT_NAME", "")).strip() or None,
+            "as_of": str(r_.get("CYCLE", "")).strip() or None,
+        })
+    return out
 
 
 def fred_series(include_restricted: bool = False) -> dict:
@@ -4181,6 +4245,10 @@ def attach_context(ex: pd.DataFrame, inst: pd.DataFrame, val_all: pd.DataFrame,
             out["per_vs_peer"] = own / out["peer_per"] - 1
             out["per_excluded"] = out.get("per").notna() & own.isna()
     # 공시 이벤트 — 희석·위험만 추립니다
+    #
+    # 접수번호를 붙여 원문으로 갈 수 있게 합니다. 제목만 주면 읽는 쪽(사람이든
+    # 에이전트든)이 "전환사채 발행결정"까지만 알고 발행조건·전환가·리픽싱 조항은
+    # 모른 채 판단하게 됩니다. 그건 1차 출처를 본 것이 아닙니다.
     if dsc is not None and not dsc.empty and "stock_code" in dsc.columns:
         flags = {}
         for _, r in dsc.iterrows():
@@ -4189,10 +4257,12 @@ def attach_context(ex: pd.DataFrame, inst: pd.DataFrame, val_all: pd.DataFrame,
             if c not in out.index or not tg:
                 continue
             nm = str(r.get("report_nm", ""))[:34]
+            rn = str(r.get("rcept_no", "")).strip()
+            src = f" [원문 {DART_VIEWER}{rn}]" if rn else ""
             if "dilution" in tg:
-                flags.setdefault(c, []).append(f"희석 공시: {nm}")
+                flags.setdefault(c, []).append(f"희석 공시: {nm}{src}")
             if "risk" in tg:
-                flags.setdefault(c, []).append(f"위험 공시: {nm}")
+                flags.setdefault(c, []).append(f"위험 공시: {nm}{src}")
         out["event_flags"] = pd.Series(
             {c: list(dict.fromkeys(v))[:3] for c, v in flags.items()}).reindex(out.index)
     return out
@@ -5370,9 +5440,11 @@ def cmd_doctor() -> int:
                       ("DART_API_KEY", "공시·재무 (필수)"),
                       ("KIS_APP_KEY", "실시간 시세 (선택)"),
                       ("KIS_APP_SECRET", "실시간 시세 (선택)"),
+                      ("ECOS_API_KEY", "한국은행 거시통계 (선택)"),
                       ("FRED_API_KEY", "해외 매크로 (선택)")):
         has = has_key(name)
-        if name not in ("FRED_API_KEY", "KIS_APP_KEY", "KIS_APP_SECRET"):
+        if name not in ("FRED_API_KEY", "ECOS_API_KEY",
+                        "KIS_APP_KEY", "KIS_APP_SECRET"):
             ok &= has
         print(f"    {'O' if has else 'X'}  {name:<14} {why}")
 
@@ -6282,6 +6354,53 @@ def cmd_quote(codes: list[str], with_orderbook: bool = True,
     return 0 if payload["ok"] else 1
 
 
+# ── 통합 계층 (1-d) — 거시 재료 (한국은행 ECOS) ───────────────────────
+#
+# 에이전트가 금리·환율·경기를 이야기할 때, 지금까지 그 숫자는 전부 언어모델의
+# 기억에서 나왔습니다. 학습 시점에 멈춘 값이고 출처도 없습니다. 회수 시점
+# 판단에서 금리 국면을 틀리면 나머지 논의가 통째로 어긋납니다.
+#
+# 중앙은행 공식 통계로 바꿉니다.
+#
+#   1. **통계표코드를 하드코딩하지 않습니다.** 100대 통계는 응답이 통계명을
+#      스스로 들고 옵니다. 이름을 이쪽에서 붙이면 '한국은행이 이렇게 말했다'가
+#      아니라 '우리가 이렇게 불렀다'가 됩니다.
+#   2. **원장에 쓰지 않습니다.** 이 명령은 조회 결과를 stdout 으로만 냅니다.
+#   3. **stdout 은 JSON 만.** 진단은 stderr 로.
+MACRO_SCHEMA = "ki.macro/1"
+
+
+def macro_payload(limit: int = 100) -> dict:
+    """한국은행 100대 통계 한 벌. 실패해도 예외 대신 ok:false 로 돌려줍니다."""
+    out = {"ok": False, "schema": MACRO_SCHEMA,
+           "source": "한국은행 경제통계시스템(ECOS) — 100대 통계지표",
+           "source_url": "https://ecos.bok.or.kr/api/",
+           "fetched_at": datetime.now().isoformat(timespec="seconds"),
+           "stats": [], "reason": None}
+    if not ecos_available():
+        out["reason"] = "ECOS_API_KEY 가 .env 에 없습니다."
+        return out
+    try:
+        rows = ecos_key_stats(limit)
+    except Exception as e:                              # noqa: BLE001
+        out["reason"] = f"{type(e).__name__}: {e}"
+        return out
+    if not rows:
+        out["reason"] = "응답에 통계가 없습니다."
+        return out
+    out["stats"] = rows
+    out["n"] = len(rows)
+    out["ok"] = True
+    return out
+
+
+def cmd_macro(limit: int = 100, indent: int | None = None) -> int:
+    """macro 명령 — stdout 은 JSON 만."""
+    payload = macro_payload(limit)
+    print(json.dumps(payload, ensure_ascii=False, indent=indent))
+    return 0 if payload["ok"] else 1
+
+
 # ── 통합 계층 (2) — 에이전트 판정 싣기 ─────────────────────────────────
 #
 # PIXEL TRADING FLOOR(../trading-floor)의 에이전트들이 분석·토론해 내린 판정을
@@ -6698,6 +6817,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="DART 공시 이벤트까지 포함 (네트워크·키 필요)")
     ft.add_argument("--indent", type=int, default=None,
                     help="JSON 들여쓰기 (기본: 한 줄)")
+    mc = sub.add_parser(
+        "macro", help="한국은행 100대 통계를 JSON 으로 출력 (통합용 · ECOS 키 필요)")
+    mc.add_argument("--limit", type=int, default=100, help="가져올 통계 수 (기본 100)")
+    mc.add_argument("--indent", type=int, default=None)
+
     qt = sub.add_parser(
         "quote", help="실시간 시세를 JSON 으로 출력 (통합용 · KIS 키 필요)")
     qt.add_argument("--code", action="append", dest="q_codes", metavar="000660",
@@ -6830,6 +6954,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_candles(args.code, args.days, args.raw, args.indent)
     elif args.cmd == "quote":
         return cmd_quote(args.q_codes, not args.no_orderbook, args.indent)
+    elif args.cmd == "macro":
+        return cmd_macro(args.limit, args.indent)
     return 0
 
 

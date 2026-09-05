@@ -11,7 +11,7 @@ AI 에이전트들이 시장 데이터를 분석하고 토론해 매매 판정�
 node server/server.js          # http://localhost:8000
 # 포트 충돌 시: PORT=8123 node server/server.js
 # Windows: start-floor.cmd 더블클릭
-npm test                       # 164개 단위 테스트
+npm test                       # 170개 단위 테스트
 ```
 
 의존성 설치 불필요 — `package.json`에 dependencies가 없고 Node 내장 모듈만 쓴다.
@@ -99,6 +99,9 @@ SK하이닉스·삼성전자는 **USDT 결제 무기한 선물**이 여러 거�
 
 - **외부 의존성을 추가하지 않는다.** npm 패키지 0개가 이 프로젝트의 제약이자 이식성이다
 - **데이터에 없는 수치를 지어내지 않는다.** 없으면 "데이터 없음"으로 표기
+- **재료에 등급이 있다.** KRX·DART·한국은행 ECOS·KIS 는 1차(근거 가능),
+  구글 뉴스 헤드라인·공포탐욕지수는 참고(근거 불가). `SOURCE_RULE` 이 16명
+  전원에게 붙고 `roster.test.mjs` 가 강제한다. 새 소스는 등급을 먼저 정해라
 - **20배 레버리지를 언급하면 청산 리스크 경고를 반드시 함께 낸다.** `attack` 모드에서도 예외 없다
 - 시장 데이터 수집은 전부 best-effort — 한 소스가 죽어도 나머지로 계속 진행한다.
   캔들 실패만 치명적(throw)이다
