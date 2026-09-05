@@ -35,3 +35,5 @@ venv/
 # ── KIS 접근토큰 캐시 ────────────────────────────────────────────
 # 자격증명입니다. 하루짜리지만 있는 동안은 그대로 쓸 수 있습니다.
 .kis_token.json
+.api_verified.json
+.api_verified.tmp

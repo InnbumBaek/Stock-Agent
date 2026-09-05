@@ -5,7 +5,7 @@
 되고, 리포트에는 "데이터 없음"이 찍힌다. 틀렸다는 신호가 어디에도 안 뜬다.
 
 그래서 각 기관의 **공식 예제 코드**에서 응답 필드 목록을 뽑아
-`stock-monitor/api_fields.json` 에 얼려 두고, selftest 가 매번
+`stock-monitor/.api_fields.json` 에 얼려 두고, selftest 가 매번
 "내 매핑이 이 목록 안에 있는가"를 검사한다. 네트워크 없이 돈다.
 
 이 스크립트는 그 목록을 **갱신할 때만** 쓴다 (인터넷 필요).
@@ -25,7 +25,7 @@ import urllib.request
 from datetime import date
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent.parent / "stock-monitor" / "api_fields.json"
+OUT = Path(__file__).resolve().parent.parent / "stock-monitor" / ".api_fields.json"
 UA = {"User-Agent": "ki-monitor-spec-fetch"}
 
 

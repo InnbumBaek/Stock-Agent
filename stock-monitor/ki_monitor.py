@@ -247,7 +247,7 @@ KIS = {
     #        access_token_token_expired 를 씁니다. 둘 다 봅니다.
     #
     # 이 대조는 한 번 하고 끝나지 않습니다. 공식 예제에서 뽑은 필드 목록을
-    # api_fields.json 에 얼려 두고, selftest 가 매번 "내 매핑이 그 안에
+    # .api_fields.json 에 얼려 두고, selftest 가 매번 "내 매핑이 그 안에
     # 있는가"를 검사합니다 (네트워크 불필요). 목록 갱신은
     # docs/fetch_api_spec.py 가 합니다.
     #
@@ -448,11 +448,56 @@ def _requests():
 # 성공해도 필드 이름을 하나 잘못 적으면 그 값은 조용히 None 이 되고, 리포트에는
 # "데이터 없음"이 찍힙니다. 틀렸다는 신호가 어디에도 뜨지 않습니다.
 #
-# 그래서 각 기관의 공식 예제 코드에서 뽑은 응답 필드 목록을 api_fields.json 에
+# 그래서 각 기관의 공식 예제 코드에서 뽑은 응답 필드 목록을 .api_fields.json 에
 # 얼려 두고, selftest 가 매번 "내 매핑이 그 안에 있는가"를 검사합니다.
 # 네트워크는 필요 없습니다. 목록 갱신은 docs/fetch_api_spec.py 가 합니다.
 
-API_FIELDS_PATH = ROOT / "api_fields.json"
+API_FIELDS_PATH = ROOT / ".api_fields.json"
+
+# 실응답 대조 기록 — 이 컴퓨터에서 실제로 받아 본 것만 적힙니다.
+#
+# 필드 이름이 명세와 같다는 것과, 실제로 받은 값이 상식적이라는 것은 다릅니다.
+# 후자는 한 번 받아 봐야 압니다. 그런데 그것을 사람이 기억해서 눌러야 하는
+# 일로 두면 아무도 안 누릅니다.
+#
+# 그래서 **성공한 호출이 스스로 기록합니다.** 검산까지 통과한 호출만 적히고,
+# 무엇을 근거로 통과했는지(예: 삼성전자 71,200원)도 같이 적힙니다. 이 파일은
+# 이 컴퓨터의 사실이므로 저장소에 올리지 않습니다(.gitignore).
+API_VERIFIED_PATH = ROOT / ".api_verified.json"
+
+
+def verified_log() -> dict:
+    try:
+        with io.open(API_VERIFIED_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+            return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def record_verified(source: str, detail: str) -> None:
+    """실응답 대조 성공을 남깁니다. 실패하면 조용히 넘어갑니다.
+
+    기록에 실패했다고 해서 시세 조회가 멈추면 안 됩니다 — 이건 부수적인
+    기록이지 본 일이 아닙니다."""
+    try:
+        log = verified_log()
+        log[source] = {"at": datetime.now().isoformat(timespec="seconds"),
+                       "detail": str(detail)[:200]}
+        tmp = API_VERIFIED_PATH.with_suffix(".tmp")
+        with io.open(tmp, "w", encoding="utf-8") as f:
+            json.dump(log, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, API_VERIFIED_PATH)
+    except Exception:                                   # noqa: BLE001
+        pass
+
+
+def verified_state(source: str, shipped: bool) -> str:
+    """화면에 적을 한 줄. 실응답 기록이 있으면 그것이 우선입니다."""
+    rec = verified_log().get(source)
+    if rec:
+        return f"실응답 확인 ({rec.get('at', '')[:10]} · {rec.get('detail', '')})"
+    return "검증 완료" if shipped else None
 
 
 def api_spec() -> dict:
@@ -507,6 +552,8 @@ def krx_get(service: str, bas_dd: str, retries: int = 3):
             reachable = True
             if _KRX_BASE["url"] is None:
                 _KRX_BASE["url"] = base
+                record_verified("krx", f"{service} {bas_dd} · "
+                                       f"{base.split('://')[0].upper()} 로 연결")
                 if base.startswith("http://"):
                     print("  [경고] KRX 에 HTTPS 로 붙지 못해 평문 HTTP 로 "
                           "내려갔습니다. 인증키가 평문으로 나갑니다 — "
@@ -1186,6 +1233,9 @@ def dart_corp_codes(all_corps: bool = False) -> pd.DataFrame:
             df = pd.read_xml(io.BytesIO(z.read(z.namelist()[0])), dtype=str)
         if "stock_code" not in df.columns:
             return df.iloc[0:0]
+        # 캐시가 아니라 실제로 받아 온 응답입니다. 필요한 열이 있는 것까지
+        # 확인한 뒤에 기록합니다 — 받았다는 것만으로는 대조가 아닙니다.
+        record_verified("dart", f"고유번호 {len(df):,}건 (stock_code 열 확인)")
         df["stock_code"] = df["stock_code"].fillna("").astype(str).str.strip()
         try:
             df.to_parquet(cache)
@@ -4899,14 +4949,26 @@ def selftest() -> int:
 
     # ── 공식 필드 목록과의 대조 ──────────────────────────────────────
     #
-    # 아래 검사들이 api_fields.json 을 읽습니다. 파일이 없으면 통과가 아니라
+    # 아래 검사들이 .api_fields.json 을 읽습니다. 파일이 없으면 통과가 아니라
     # **실패**입니다 — 대조하지 않은 것을 대조했다고 넘기면 이 검사가 있으나
     # 마나이기 때문입니다.
-    check("공식 필드 목록(api_fields.json)이 있다", lambda: _assert(
+    check("공식 필드 목록(.api_fields.json)이 있다", lambda: _assert(
         bool(api_spec().get("sources"))))
     check("KRX 는 HTTPS 로 먼저 붙는다 (인증키가 헤더로 나갑니다)", lambda: _assert(
         KRX["base_url"].startswith("https://")
         and krx_base_url().startswith("https://")))
+
+    # ── 실응답 대조 기록 ────────────────────────────────────────────
+    #
+    # 이 기록은 "받아 봤다"는 주장을 담습니다. 그러므로 (1) 실제로 왕복해야
+    # 하고, (2) 기록이 없을 때 있다고 말하면 안 되고, (3) 출하하는 코드가
+    # 미리 True 를 박아 두면 안 됩니다. 셋 다 검사합니다.
+    check("실응답 기록이 왕복한다", lambda: _assert(
+        _verified_roundtrip()))
+    check("기록이 없으면 실응답을 주장하지 않는다", lambda: _assert(
+        _verified_absent_is_silent()))
+    check("출하 시점 KIS·ECOS 는 실응답 미대조", lambda: _assert(
+        KIS["verified"] is False and ECOS["verified"] is False))
     check("KIS 현재가 매핑이 공식 예제 필드 안에 있다", lambda: _assert(
         {k for k, v in KIS["field_map"].items()
          if v not in ("bid", "ask", "bid_qty", "ask_qty")}
@@ -5650,15 +5712,26 @@ def cmd_check_auth(live: bool = False) -> int:
         ok = ok and present
         print(f"{label:<12}: {'O' if present else 'X'}")
     print("-" * 46)
-    print(f"KRX 필드매핑 : {'검증 완료' if KRX['verified'] else '미검증 — 명세서 대조 필요'}")
-    for label, cfg in (("KIS", KIS), ("ECOS", ECOS)):
-        if cfg.get("verified"):
-            state = "실응답 대조 완료"
-        elif cfg.get("spec_checked"):
+    # 필드 매핑이 어디까지 확인됐는가 — 세 단계입니다.
+    #   ① 명세 대조   공식 예제와 이름이 같다 (selftest 가 매번 검사)
+    #   ② 실응답 확인  이 컴퓨터에서 실제로 받아 검산까지 통과했다
+    #   ③ 없음        아직 아무것도 아니다
+    # ②는 사람이 누르는 것이 아니라 성공한 호출이 스스로 남깁니다.
+    for label, key, cfg in (("KRX", "krx", KRX), ("DART", "dart", None),
+                            ("KIS", "kis", KIS), ("ECOS", "ecos", ECOS)):
+        live = verified_state(key, bool(cfg and cfg.get("verified")))
+        if live and live.startswith("실응답"):
+            state = live
+        elif cfg and cfg.get("verified"):
+            state = "실응답 대조 완료 (출하 시점 기록)"
+        elif cfg and cfg.get("spec_checked"):
             state = f"명세 대조 완료 ({cfg['spec_checked']}) · 실응답 미대조"
         else:
-            state = "미검증 — 명세서 대조 필요"
-        print(f"{label} 필드매핑{'' if label == 'ECOS' else ' '}: {state}")
+            state = "명세 대조 완료 · 실응답 미대조"
+        print(f"{label:<5}필드매핑: {state}")
+    if not verified_log():
+        print("  (실응답 확인은 한 번 성공적으로 호출하면 자동으로 남습니다 — "
+              "python ki_monitor.py diagnose)")
     if live and ok:
         print("-" * 46)
         try:
@@ -5781,6 +5854,35 @@ def _diag_fred() -> tuple[bool, str, str]:
         return True, f"미 국채 10년 {len(s)}일치", ""
     except Exception as e:                              # noqa: BLE001
         return False, str(e)[:70], "fredaccount.stlouisfed.org/apikeys 에서 키를 확인하십시오."
+
+
+def _verified_roundtrip() -> bool:
+    """기록기를 임시 폴더에서 한 바퀴 돌립니다. 사용자 파일은 건드리지 않습니다."""
+    import tempfile
+    global API_VERIFIED_PATH
+    keep = API_VERIFIED_PATH
+    with tempfile.TemporaryDirectory() as d:
+        API_VERIFIED_PATH = Path(d) / ".api_verified.json"
+        try:
+            record_verified("kis", "005930 71,200원")
+            st = verified_state("kis", False)
+            return bool(st and st.startswith("실응답") and "71,200원" in st)
+        finally:
+            API_VERIFIED_PATH = keep
+
+
+def _verified_absent_is_silent() -> bool:
+    """기록이 없을 때 '실응답 확인' 이라고 말하면 안 됩니다."""
+    import tempfile
+    global API_VERIFIED_PATH
+    keep = API_VERIFIED_PATH
+    with tempfile.TemporaryDirectory() as d:
+        API_VERIFIED_PATH = Path(d) / "없는파일.json"
+        try:
+            return (verified_state("kis", False) is None
+                    and verified_state("krx", True) == "검증 완료")
+        finally:
+            API_VERIFIED_PATH = keep
 
 
 def _dart_endpoint_conflicts() -> list:
@@ -6695,6 +6797,9 @@ def quote_payload(code: str, with_orderbook: bool = True) -> dict:
                             if bq is not None and aq is not None and (bq + aq) else None)
     out["quote"] = q
     out["ok"] = True
+    # 검산까지 통과한 실응답입니다. 이제서야 "받아 봤다"고 말할 수 있습니다.
+    record_verified("kis", f"{code} {px:,.0f}원 (시장구분 {q.get('market_div', '?')})"
+                    if px is not None else code)
     return out
 
 
@@ -6756,6 +6861,9 @@ def macro_payload(limit: int = 100) -> dict:
     out["stats"] = rows
     out["n"] = len(rows)
     out["ok"] = True
+    head = rows[0]
+    record_verified("ecos", f"{len(rows)}건 (예: {head['name']} {head['value']}"
+                            f"{head.get('unit') or ''})")
     return out
 
 

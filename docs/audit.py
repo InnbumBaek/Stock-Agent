@@ -149,7 +149,7 @@ for args, want in [(["selftest"], "passed"), (["macro"], "ki.macro/1"),
                    (["quote", "--code", "000660"], "ki.quote/1"),
                    (["facts", "--code", "000660"], "ki.facts/1"),
                    (["candles", "--code", "000660"], "ki.candles/1"),
-                   (["doctor"], "[1] 패키지"), (["check-auth"], "KIS 필드매핑"),
+                   (["doctor"], "[1] 패키지"), (["check-auth"], "KIS  필드매핑"),
                    (["catalog"], ""), (["--help"], "quote")]:
     r = subprocess.run([sys.executable, "ki_monitor.py"] + args,
                        cwd=ROOT / "stock-monitor", capture_output=True, text=True, timeout=120)
@@ -221,7 +221,7 @@ if hit and not added:
 r = subprocess.run(["git", "ls-files"], capture_output=True, text=True, cwd=ROOT)
 tracked = r.stdout.split()
 FORBIDDEN = [".env", "ki.sqlite", "watchlist.csv", "exit_plan.csv", "positions.csv",
-             "config.json", ".kis_token.json"]
+             "config.json", ".kis_token.json", ".api_verified.json"]
 leaked = [t for t in tracked
           if any(t.endswith(f) for f in FORBIDDEN) and not t.endswith(".example")
           and "sample" not in t]

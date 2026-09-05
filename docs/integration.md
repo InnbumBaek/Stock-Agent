@@ -742,7 +742,7 @@ python ki_monitor.py report --market KOSPI --with-agents
 ## 8. 검증
 
 ```bash
-cd stock-monitor  && python ki_monitor.py selftest    # 117개 (기존 64 + 통합 53)
+cd stock-monitor  && python ki_monitor.py selftest    # 120개 (기존 64 + 통합 53)
 cd trading-floor  && npm test                          # 193개 (기존 68 + 통합 125)
 ```
 
