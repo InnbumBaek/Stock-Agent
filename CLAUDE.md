@@ -109,7 +109,7 @@ diff 에 잡혀 실제 변경이 묻힌다. 편집 후 `file <파일>` 로 확�
 두 쪽 다 통과해야 통합이 성립한다.
 
 ```bash
-cd stock-monitor && python ki_monitor.py selftest   # 104개 (키·네트워크 불필요)
+cd stock-monitor && python ki_monitor.py selftest   # 108개 (키·네트워크 불필요)
 cd trading-floor && npm test                         # 183개
 ```
 

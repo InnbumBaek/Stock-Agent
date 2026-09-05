@@ -226,7 +226,25 @@ DART = {
 KIS = {
     "base_url": "https://openapi.koreainvestment.com:9443",
     "token_path": "/oauth2/tokenP",
-    "verified": False,              # 실응답 1회 대조 전까지 False (kis_sanity 가 검산)
+    # verified  — **실응답**과 대조했는가. 아직 아닙니다.
+    # spec_checked — **공식 예제 코드**와 대조했는가. 2026-09-05 완료.
+    #
+    #   github.com/koreainvestment/open-trading-api (한국투자증권 공식) 의
+    #   examples_llm/domestic_stock/inquire_price/inquire_price.py 및
+    #   inquire_asking_price_exp_ccn/, kis_auth.py 와 아래를 대조했습니다.
+    #     · URL 경로 · tr_id · 요청 파라미터 이름 · 응답 output/output1
+    #     · 공통 헤더(authorization·appkey·appsecret·tr_id·custtype)
+    #     · 토큰 발급 경로와 만료 필드
+    #   전부 일치했고, 그 과정에서 두 가지를 고쳤습니다 —
+    #     ① 시장 구분을 J(KRX 단독) 로 못 박고 있었습니다. 넥스트레이드 개장
+    #        이후 통합(UN) 이 맞아, UN → J 폴백으로 바꿨습니다.
+    #     ② 토큰 만료를 expires_in 으로만 읽었습니다. 공식은
+    #        access_token_token_expired 를 씁니다. 둘 다 봅니다.
+    #
+    # 그래도 verified 는 False 입니다. 명세가 맞아도 실제 값이 상식적인지는
+    # 한 번 받아 봐야 압니다. kis_sanity 가 매 호출 검산합니다.
+    "verified": False,
+    "spec_checked": "2026-09-05 · 한국투자증권 공식 예제 저장소",
     "quote_api_exists": True,
     "token_cache": ".kis_token.json",   # 프로세스가 매번 새로 뜨므로 파일에 캐시
     "allowed": {
@@ -234,6 +252,15 @@ KIS = {
         "orderbook": "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn",
     },
     "tr_id": {"quote": "FHKST01010100", "orderbook": "FHKST01010200"},
+    # 조건 시장 분류 코드 — J:KRX, NX:넥스트레이드, UN:통합
+    #
+    # 넥스트레이드가 열린 뒤로 KRX 만 보면 통합 최우선호가를 놓칩니다. 회수
+    # 판단에서 "지금 얼마에 팔리는가"는 통합 기준이 맞습니다.
+    #
+    # 다만 UN 은 계좌·시점에 따라 거부될 수 있어 확인 없이 못 박지 않습니다.
+    # UN 을 먼저 시도하고 실패하면 J 로 내려갑니다. 어느 쪽을 썼는지는
+    # 응답에 남겨, 리포트를 읽는 사람이 무엇을 본 값인지 알 수 있게 합니다.
+    "market_div": ["UN", "J"],
     "denied": ["order", "order_modify", "order_cancel", "balance", "overseas",
                "order_credit", "order_rvsecncl", "psbl_order", "trading"],
     "field_map": {
@@ -876,7 +903,9 @@ DART_VIEWER = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo="
 
 ECOS = {
     "base_url": "https://ecos.bok.or.kr/api",
-    "verified": False,      # 실응답 1회 대조 전까지 False
+    # KIS 와 같습니다 — 명세는 대조했고 실응답은 아직입니다.
+    "verified": False,
+    "spec_checked": "2026-09-05 · 한국은행 Open API 명세 및 표준 클라이언트",
     "allowed": {"key_stats": "KeyStatisticList"},   # 읽기 전용. 조회 하나뿐입니다
     "lang": "kr",
     "max_rows": 100,
@@ -1252,6 +1281,7 @@ class KISClient:
 
     def __init__(self) -> None:
         self._token, self._exp = None, 0.0
+        self.market_div = None      # 마지막 호출이 쓴 시장 구분 (UN 또는 J)
 
     # 토큰 --------------------------------------------------------------
     #
@@ -1298,7 +1328,18 @@ class KISClient:
         r.raise_for_status()
         body = r.json()
         self._token = body["access_token"]
-        self._exp = time.time() + float(body.get("expires_in", 86400))
+        # 공식 예제는 access_token_token_expired("YYYY-MM-DD HH:MM:SS")를 씁니다.
+        # expires_in 은 초 단위 폴백입니다 — 둘 중 있는 것을 씁니다.
+        exp = None
+        raw = body.get("access_token_token_expired")
+        if raw:
+            try:
+                exp = datetime.strptime(str(raw), "%Y-%m-%d %H:%M:%S").timestamp()
+            except (TypeError, ValueError):
+                exp = None
+        if exp is None:
+            exp = time.time() + float(body.get("expires_in", 86400))
+        self._exp = exp
         self._store(self._token, self._exp)
         return self._token
 
@@ -1318,21 +1359,25 @@ class KISClient:
         if endpoint not in KIS["allowed"]:
             raise OrderNotAllowed(f"화이트리스트에 없는 엔드포인트: {endpoint}")
         requests = _requests()
-        r = requests.get(KIS["base_url"] + KIS["allowed"][endpoint],
-                         headers=self._headers(endpoint), timeout=15,
-                         params={"FID_COND_MRKT_DIV_CODE": "J",
-                                 "FID_INPUT_ISCD": str(code).strip()})
-        r.raise_for_status()
-        body = r.json()
-        # KIS 는 HTTP 200 에 실패를 담아 보냅니다. rt_cd 가 '0' 이 아니면 실패입니다.
-        if str(body.get("rt_cd", "0")) != "0":
-            raise RuntimeError(f"KIS {endpoint} 실패: "
-                               f"{body.get('msg_cd', '')} {body.get('msg1', '')}".strip())
-        return body
+        last = None
+        for div in KIS["market_div"]:
+            r = requests.get(KIS["base_url"] + KIS["allowed"][endpoint],
+                             headers=self._headers(endpoint), timeout=15,
+                             params={"FID_COND_MRKT_DIV_CODE": div,
+                                     "FID_INPUT_ISCD": str(code).strip()})
+            r.raise_for_status()
+            body = r.json()
+            # KIS 는 HTTP 200 에 실패를 담아 보냅니다. rt_cd 가 '0' 이 아니면 실패입니다.
+            if str(body.get("rt_cd", "0")) == "0":
+                self.market_div = div       # 어느 시장 기준으로 받았는지 남깁니다
+                return body
+            last = f"{body.get('msg_cd', '')} {body.get('msg1', '')}".strip()
+        raise RuntimeError(f"KIS {endpoint} 실패: {last}")
 
     def quote(self, code: str, with_orderbook: bool = True) -> dict:
         """현재가 + (선택) 호가. 호가가 실패해도 현재가는 살립니다."""
         out = kis_map_quote(self._call("quote", code))
+        out["market_div"] = self.market_div
         if with_orderbook:
             try:
                 out.update(kis_map_orderbook(self._call("orderbook", code)))
@@ -4771,6 +4816,14 @@ def selftest() -> int:
         OrderNotAllowed, lambda: KISClient()._call("inquire-balance", "005930")))
     check("시세 화이트리스트는 두 개뿐", lambda: _assert(
         set(KIS["allowed"]) == {"quote", "orderbook"}))
+    check("시장 구분은 통합(UN) 을 먼저 본다", lambda: _assert(
+        KIS["market_div"][0] == "UN" and "J" in KIS["market_div"]))
+    check("KIS·ECOS 는 실응답 대조 전까지 verified=False", lambda: _assert(
+        KIS["verified"] is False and ECOS["verified"] is False))
+    check("명세 대조 기록은 남아 있다", lambda: _assert(
+        bool(KIS.get("spec_checked")) and bool(ECOS.get("spec_checked"))))
+    check("ECOS 는 조회 하나뿐 (읽기 전용)", lambda: _assert(
+        set(ECOS["allowed"]) == {"key_stats"}))
     check("실시간 스냅샷은 원장에 쓰지 않는다", lambda: _assert(
         all(not persist for key, _s, _u, _f, _sec, _r, persist in CATALOG
             if key.startswith("kis.snap."))))
@@ -5491,7 +5544,14 @@ def cmd_check_auth(live: bool = False) -> int:
         print(f"{label:<12}: {'O' if present else 'X'}")
     print("-" * 46)
     print(f"KRX 필드매핑 : {'검증 완료' if KRX['verified'] else '미검증 — 명세서 대조 필요'}")
-    print(f"KIS 필드매핑 : {'검증 완료' if KIS['verified'] else '미검증 — 명세서 대조 필요'}")
+    for label, cfg in (("KIS", KIS), ("ECOS", ECOS)):
+        if cfg.get("verified"):
+            state = "실응답 대조 완료"
+        elif cfg.get("spec_checked"):
+            state = f"명세 대조 완료 ({cfg['spec_checked']}) · 실응답 미대조"
+        else:
+            state = "미검증 — 명세서 대조 필요"
+        print(f"{label} 필드매핑{'' if label == 'ECOS' else ' '}: {state}")
     if live and ok:
         print("-" * 46)
         try:
