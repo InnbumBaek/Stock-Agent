@@ -61,7 +61,11 @@ echo  [5/5] 재무 적재 (약 10분)
 echo.
 echo  원장 연동을 켭니다.
 cd /d "%~dp0trading-floor"
-node -e "const fs=require('fs');const p='config.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));c.ki=Object.assign({},c.ki,{enabled:true});fs.writeFileSync(p,JSON.stringify(c,null,2));console.log('  config.json - 원장 연동 켬');"
+node -e "const fs=require('fs');const p='config.json';let c={};try{c=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){c={}};c.ki=Object.assign({},c.ki,{enabled:true});if(!Array.isArray(c.watchlist))c.watchlist=[];fs.writeFileSync(p,JSON.stringify(c,null,2));console.log('  config.json - 원장 연동 켬');"
+if errorlevel 1 (
+  echo   ^[!^] config.json 을 고치지 못했습니다.
+  echo       trading-floor\config.json 을 열어 ki.enabled 를 true 로 바꾸십시오.
+)
 
 echo.
 echo  ===============================================
