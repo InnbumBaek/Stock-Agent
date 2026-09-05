@@ -769,7 +769,17 @@ python ki_monitor.py report --market KOSPI --with-agents
   총변동성으로 대신하지 않는다. 대신했다면 그 인용이 거짓이 된다.
 - **`paper` 는 `stock-monitor/.papers.json` 에 실재해야 한다.** `selftest` 가 검사한다.
 - **판정 어휘를 담지 않는다.** 매수·매도·저평가·목표가는 여기 없다 (`selftest` 검사).
-- 논문 갱신·재대조: `python docs/fetch_papers.py [--write]` (인터넷 필요).
+- 논문은 **연도별로** 관리한다. 각 항목에 `year` 와 `question`(q1~q4)이 붙고,
+  파일은 연도순이다 — 어느 연대가 비었는지 파일만 열어도 보이게.
+
+  ```bash
+  python docs/fetch_papers.py                     # 연도별 현황 (네트워크 불필요)
+  python docs/fetch_papers.py --harvest 2013-2026 # 그 구간을 연도별로 훑어 후보에 쌓기
+  python docs/fetch_papers.py --verify [--write]  # 채택본 발행정보 재대조 (Crossref)
+  ```
+
+  수확 결과는 `.papers_candidates.json`(gitignore)에 `adopted:false` 로 쌓이고
+  **인용되지 않는다.** `papers()` 가 걸러내고 `selftest` 가 검사한다.
 
 받는 쪽은 `ki-bridge.js` 의 `fetchKiFactors()` → `formatKiFactorLines()` 이고,
 **퀀트 데스크(QUANT) 한 명에게만** 간다. QUANT 는 그것을 읽고 *다른 에이전트에게
@@ -781,7 +791,7 @@ python ki_monitor.py report --market KOSPI --with-agents
 ## 8. 검증
 
 ```bash
-cd stock-monitor  && python ki_monitor.py selftest    # 125개 (기존 64 + 통합 53)
+cd stock-monitor  && python ki_monitor.py selftest    # 127개 (기존 64 + 통합 53)
 cd trading-floor  && npm test                          # 200개 (기존 68 + 통합 125)
 ```
 

@@ -1,17 +1,19 @@
 {
   "schema": "ki.papers/1",
   "verified": "2026-09-05",
-  "note": "팩터 계산이 근거로 삼는 논문. 각 항목은 발행 정보를 웹 검색으로 대조한 것입니다. 갱신·재대조: python docs/fetch_papers.py",
+  "note": "팩터가 근거로 삼는 논문. 연도순으로 관리하며, 새 연도는 docs/fetch_papers.py --harvest 로 훑어 후보 파일에 쌓고, 네 질문 중 하나를 바꿀 때만 여기로 채택합니다.",
   "papers": {
-    "jt1993": {
-      "authors": "Jegadeesh, N. and Titman, S.",
-      "year": 1993,
-      "title": "Returns to Buying Winners and Selling Losers: Implications for Stock Market Efficiency",
+    "roll1984": {
+      "authors": "Roll, R.",
+      "year": 1984,
+      "title": "A Simple Implicit Measure of the Effective Bid-Ask Spread in an Efficient Market",
       "journal": "The Journal of Finance",
-      "volume": "48(1)",
-      "pages": "65-91",
-      "doi": "10.1111/j.1540-6261.1993.tb04702.x",
-      "checked": "2026-09-05 · onlinelibrary.wiley.com · econpapers.repec.org"
+      "volume": "39(4)",
+      "pages": "1127-1139",
+      "doi": "10.1111/j.1540-6261.1984.tb03897.x",
+      "checked": "2026-09-05 · onlinelibrary.wiley.com · ideas.repec.org",
+      "question": "q2",
+      "adopted": true
     },
     "j1990": {
       "authors": "Jegadeesh, N.",
@@ -21,87 +23,9 @@
       "volume": "45(3)",
       "pages": "881-898",
       "doi": "10.1111/j.1540-6261.1990.tb05110.x",
-      "checked": "2026-09-05 · onlinelibrary.wiley.com · ideas.repec.org"
-    },
-    "amihud2002": {
-      "authors": "Amihud, Y.",
-      "year": 2002,
-      "title": "Illiquidity and stock returns: Cross-section and time-series effects",
-      "journal": "Journal of Financial Markets",
-      "volume": "5(1)",
-      "pages": "31-56",
-      "doi": "10.1016/S1386-4181(01)00024-6",
-      "checked": "2026-09-05 · cis.upenn.edu(원문 PDF) · sciencedirect.com"
-    },
-    "ahxz2006": {
-      "authors": "Ang, A., Hodrick, R. J., Xing, Y. and Zhang, X.",
-      "year": 2006,
-      "title": "The Cross-Section of Volatility and Expected Returns",
-      "journal": "The Journal of Finance",
-      "volume": "61(1)",
-      "pages": "259-299",
-      "doi": "10.1111/j.1540-6261.2006.00836.x",
-      "checked": "2026-09-05 · onlinelibrary.wiley.com · business.columbia.edu(원문 PDF)"
-    },
-    "gh2004": {
-      "authors": "George, T. J. and Hwang, C.-Y.",
-      "year": 2004,
-      "title": "The 52-Week High and Momentum Investing",
-      "journal": "The Journal of Finance",
-      "volume": "59(5)",
-      "pages": "2145-2176",
-      "doi": "10.1111/j.1540-6261.2004.00695.x",
-      "checked": "2026-09-05 · onlinelibrary.wiley.com"
-    },
-    "cs2012": {
-      "authors": "Corwin, S. A. and Schultz, P.",
-      "year": 2012,
-      "title": "A Simple Way to Estimate Bid-Ask Spreads from Daily High and Low Prices",
-      "journal": "The Journal of Finance",
-      "volume": "67(2)",
-      "pages": "719-760",
-      "doi": "10.1111/j.1540-6261.2012.01729.x",
-      "checked": "2026-09-05 · onlinelibrary.wiley.com · econpapers.repec.org"
-    },
-    "roll1984": {
-      "authors": "Roll, R.",
-      "year": 1984,
-      "title": "A Simple Implicit Measure of the Effective Bid-Ask Spread in an Efficient Market",
-      "journal": "The Journal of Finance",
-      "volume": "39(4)",
-      "pages": "1127-1139",
-      "doi": "10.1111/j.1540-6261.1984.tb03897.x",
-      "checked": "2026-09-05 · onlinelibrary.wiley.com · ideas.repec.org"
-    },
-    "dnr1998": {
-      "authors": "Datar, V. T., Naik, N. Y. and Radcliffe, R.",
-      "year": 1998,
-      "title": "Liquidity and stock returns: An alternative test",
-      "journal": "Journal of Financial Markets",
-      "volume": "1(2)",
-      "pages": "203-219",
-      "doi": "10.1016/S1386-4181(97)00004-9",
-      "checked": "2026-09-05 · sciencedirect.com · ideas.repec.org"
-    },
-    "athl2005": {
-      "authors": "Almgren, R., Thum, C., Hauptmann, E. and Li, H.",
-      "year": 2005,
-      "title": "Direct Estimation of Equity Market Impact",
-      "journal": "Risk",
-      "volume": "18(7)",
-      "pages": "58-62",
-      "doi": null,
-      "checked": "2026-09-05 · researchgate.net · scispace.com (DOI 없음 — Risk 지 기고문)"
-    },
-    "fh2001": {
-      "authors": "Field, L. C. and Hanka, G.",
-      "year": 2001,
-      "title": "The Expiration of IPO Share Lockups",
-      "journal": "The Journal of Finance",
-      "volume": "56(1)",
-      "pages": "471-500",
-      "doi": "10.1111/0022-1082.00334",
-      "checked": "2026-09-05 · onlinelibrary.wiley.com · papers.ssrn.com"
+      "checked": "2026-09-05 · onlinelibrary.wiley.com · ideas.repec.org",
+      "question": "q1",
+      "adopted": true
     },
     "ritter1991": {
       "authors": "Ritter, J. R.",
@@ -111,7 +35,33 @@
       "volume": "46(1)",
       "pages": "3-27",
       "doi": "10.1111/j.1540-6261.1991.tb03743.x",
-      "checked": "2026-09-05 · onlinelibrary.wiley.com · site.warrington.ufl.edu(저자 사이트 원문)"
+      "checked": "2026-09-05 · onlinelibrary.wiley.com · site.warrington.ufl.edu(저자 사이트 원문)",
+      "question": "q4",
+      "adopted": true
+    },
+    "jt1993": {
+      "authors": "Jegadeesh, N. and Titman, S.",
+      "year": 1993,
+      "title": "Returns to Buying Winners and Selling Losers: Implications for Stock Market Efficiency",
+      "journal": "The Journal of Finance",
+      "volume": "48(1)",
+      "pages": "65-91",
+      "doi": "10.1111/j.1540-6261.1993.tb04702.x",
+      "checked": "2026-09-05 · onlinelibrary.wiley.com · econpapers.repec.org",
+      "question": "q1",
+      "adopted": true
+    },
+    "dnr1998": {
+      "authors": "Datar, V. T., Naik, N. Y. and Radcliffe, R.",
+      "year": 1998,
+      "title": "Liquidity and stock returns: An alternative test",
+      "journal": "Journal of Financial Markets",
+      "volume": "1(2)",
+      "pages": "203-219",
+      "doi": "10.1016/S1386-4181(97)00004-9",
+      "checked": "2026-09-05 · sciencedirect.com · ideas.repec.org",
+      "question": "q2",
+      "adopted": true
     },
     "ac2000": {
       "authors": "Almgren, R. and Chriss, N.",
@@ -121,7 +71,87 @@
       "volume": "3(2)",
       "pages": "5-39",
       "doi": null,
-      "checked": "2026-09-05 · risk.net(권·호 확인) (DOI 없음 — Journal of Risk)"
+      "checked": "2026-09-05 · risk.net(권·호 확인) (DOI 없음 — Journal of Risk)",
+      "question": "q3",
+      "adopted": true
+    },
+    "fh2001": {
+      "authors": "Field, L. C. and Hanka, G.",
+      "year": 2001,
+      "title": "The Expiration of IPO Share Lockups",
+      "journal": "The Journal of Finance",
+      "volume": "56(1)",
+      "pages": "471-500",
+      "doi": "10.1111/0022-1082.00334",
+      "checked": "2026-09-05 · onlinelibrary.wiley.com · papers.ssrn.com",
+      "question": "q2",
+      "adopted": true
+    },
+    "amihud2002": {
+      "authors": "Amihud, Y.",
+      "year": 2002,
+      "title": "Illiquidity and stock returns: Cross-section and time-series effects",
+      "journal": "Journal of Financial Markets",
+      "volume": "5(1)",
+      "pages": "31-56",
+      "doi": "10.1016/S1386-4181(01)00024-6",
+      "checked": "2026-09-05 · cis.upenn.edu(원문 PDF) · sciencedirect.com",
+      "question": "q2",
+      "adopted": true
+    },
+    "gh2004": {
+      "authors": "George, T. J. and Hwang, C.-Y.",
+      "year": 2004,
+      "title": "The 52-Week High and Momentum Investing",
+      "journal": "The Journal of Finance",
+      "volume": "59(5)",
+      "pages": "2145-2176",
+      "doi": "10.1111/j.1540-6261.2004.00695.x",
+      "checked": "2026-09-05 · onlinelibrary.wiley.com",
+      "question": "q1",
+      "adopted": true
+    },
+    "athl2005": {
+      "authors": "Almgren, R., Thum, C., Hauptmann, E. and Li, H.",
+      "year": 2005,
+      "title": "Direct Estimation of Equity Market Impact",
+      "journal": "Risk",
+      "volume": "18(7)",
+      "pages": "58-62",
+      "doi": null,
+      "checked": "2026-09-05 · researchgate.net · scispace.com (DOI 없음 — Risk 지 기고문)",
+      "question": "q3",
+      "adopted": true
+    },
+    "ahxz2006": {
+      "authors": "Ang, A., Hodrick, R. J., Xing, Y. and Zhang, X.",
+      "year": 2006,
+      "title": "The Cross-Section of Volatility and Expected Returns",
+      "journal": "The Journal of Finance",
+      "volume": "61(1)",
+      "pages": "259-299",
+      "doi": "10.1111/j.1540-6261.2006.00836.x",
+      "checked": "2026-09-05 · onlinelibrary.wiley.com · business.columbia.edu(원문 PDF)",
+      "question": "q4",
+      "adopted": true
+    },
+    "cs2012": {
+      "authors": "Corwin, S. A. and Schultz, P.",
+      "year": 2012,
+      "title": "A Simple Way to Estimate Bid-Ask Spreads from Daily High and Low Prices",
+      "journal": "The Journal of Finance",
+      "volume": "67(2)",
+      "pages": "719-760",
+      "doi": "10.1111/j.1540-6261.2012.01729.x",
+      "checked": "2026-09-05 · onlinelibrary.wiley.com · econpapers.repec.org",
+      "question": "q2",
+      "adopted": true
     }
+  },
+  "questions": {
+    "q1": "얼마나 왔는가 — 회수계획 대비 진척",
+    "q2": "팔 수 있는가 — 처분 여건·거래비용",
+    "q3": "어떻게 팔 것인가 — 실행",
+    "q4": "지금이 그 때인가 — 시점·국면"
   }
 }

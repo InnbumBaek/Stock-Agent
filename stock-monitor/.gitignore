@@ -36,4 +36,5 @@ venv/
 # 자격증명입니다. 하루짜리지만 있는 동안은 그대로 쓸 수 있습니다.
 .kis_token.json
 .api_verified.json
+.papers_candidates.json
 .api_verified.tmp

@@ -49,6 +49,17 @@ KRX는 인증키 발급과 별개로 **서비스별 URL 사용신청**이 필요
 | KIS 호가 | github.com/koreainvestment/open-trading-api @main · examples_llm/domestic_stock/inquire_asking_price_exp_ccn/chk_inquire_asking_price_exp_ccn.py | 기관 공식 예제 |
 | FRED 관측치 | PyPI fredapi 0.5.2 · fredapi/fred.py | 해당 기관 API 전용 표준 클라이언트 |
 
+논문은 **연도별로** 관리합니다. 손으로 고른 목록은 고른 날짜에서 멈추기 때문입니다.
+
+```bash
+python docs/fetch_papers.py                     # 연도별 현황 · 몇 년째 갱신이 없는지
+python docs/fetch_papers.py --harvest 2013-2026 # 그 구간을 훑어 후보에 쌓기
+python docs/fetch_papers.py --verify            # 채택본 발행정보 재대조
+```
+
+훑어 온 것은 **후보**일 뿐 인용되지 않습니다. 이 데스크가 묻는 네 질문 중 하나를
+바꿀 때만 채택본으로 옮기고, 그때 그 논문이 **주장하지 않는 것**을 함께 적습니다.
+
 목록 갱신 (인터넷 필요):
 
 ```bash

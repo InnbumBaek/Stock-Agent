@@ -70,7 +70,7 @@ python ki_monitor.py daily
 그래서 교차검산·항등식·방향성 테스트를 둡니다.
 
 ```bash
-python ki_monitor.py selftest    # 125개
+python ki_monitor.py selftest    # 127개
 ```
 
 **2. 모른다는 것을 아는 게 낫습니다.**
@@ -133,7 +133,7 @@ pandas numpy scipy requests lxml
 | `eod` | 종가 기준 알림 평가 |
 | `facts` | 종목별 관측 사실을 JSON 으로 출력 (통합용 · 네트워크 불필요) |
 | `candles` | 원장의 일봉을 JSON 으로 출력 (통합용 · 네트워크 불필요) |
-| `selftest` | 자체 검증 125개 |
+| `selftest` | 자체 검증 127개 |
 | `check-auth` | 키 로딩 확인 (값은 출력하지 않음) |
 
 ---

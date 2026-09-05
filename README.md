@@ -149,7 +149,7 @@ node server/export-brief.js --run --symbols 000250,058970 --mode algo
 # 주가 모니터링 — 회수 판단 리포트
 cd stock-monitor
 python ki_monitor.py daily      # 적재 → 리포트 (에이전트 절 없음)
-python ki_monitor.py selftest   # 125개 (키 불필요)
+python ki_monitor.py selftest   # 127개 (키 불필요)
 ```
 
 ```bash

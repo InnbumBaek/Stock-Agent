@@ -5431,6 +5431,46 @@ def selftest() -> int:
         _assert(p["impact_model"]["citation"] and p["impact_model"]["limits"])
     check("모든 팩터가 실재하는 논문을 인용한다", _factors_cited)
 
+    def _papers_adopted_only():
+        """수확한 후보가 인용되면 안 됩니다.
+
+        연도별 수확기는 저널 화이트리스트로 거르긴 하지만, 거기까지는 '읽어볼
+        만한 것'이지 '근거로 삼아도 되는 것'이 아닙니다. 등급은 사람이 네 질문에
+        비추어 정합니다. 그 사이를 코드가 건너뛰지 못하게 막습니다."""
+        import tempfile as _tf
+        global PAPERS_PATH
+        keep = PAPERS_PATH
+        with _tf.TemporaryDirectory() as d:
+            PAPERS_PATH = Path(d) / "p.json"
+            io.open(PAPERS_PATH, "w", encoding="utf-8").write(json.dumps({
+                "papers": {
+                    "real": {"authors": "A", "year": 2020, "title": "T",
+                             "journal": "J", "volume": "1(1)", "pages": "1-2",
+                             "doi": "10.x/y", "adopted": True},
+                    "cand": {"authors": "B", "year": 2025, "title": "후보",
+                             "journal": "J", "volume": "1(1)", "pages": "1-2",
+                             "doi": "10.x/z", "adopted": False},
+                }}, ensure_ascii=False))
+            try:
+                _assert(set(papers()) == {"real"})
+                _assert(cite("cand") == "")     # 후보는 인용문 자체가 안 나온다
+                _assert("2020" in cite("real"))
+            finally:
+                PAPERS_PATH = keep
+    check("수확한 후보는 인용되지 않는다 (채택본만)", _papers_adopted_only)
+
+    def _papers_by_year():
+        """연도별로 관리되는가 — 연도가 없으면 무엇이 낡았는지 알 수 없습니다."""
+        ps = papers()
+        _assert(bool(ps))
+        for k, p in ps.items():
+            _assert(isinstance(p.get("year"), int) and 1900 < p["year"] < 2100)
+            _assert(p.get("question") in ("q1", "q2", "q3", "q4"))
+        # 파일이 연도순으로 정렬돼 있어야 어느 연대가 비었는지 눈으로 보입니다.
+        years = [p["year"] for p in ps.values()]
+        _assert(years == sorted(years))
+    check("논문은 연도·질문을 달고 연도순으로 관리된다", _papers_by_year)
+
     def _factors_no_verdict():
         """팩터는 재는 쪽입니다. 여기에 판정 어휘가 들어가면 절이 무너집니다."""
         con = _factor_ledger()
@@ -6869,11 +6909,17 @@ PAPERS_PATH = ROOT / ".papers.json"
 
 
 def papers() -> dict:
+    """**채택본만** 돌려줍니다.
+
+    연도별 수확기(docs/fetch_papers.py --harvest)가 쌓는 후보는 다른 파일에
+    있고, 여기로 오지 않습니다. 후보는 아직 등급이 정해지지 않은 재료입니다 —
+    그것이 인용되는 순간 "훑어 왔다"가 "근거로 삼았다"가 됩니다."""
     try:
         with io.open(PAPERS_PATH, encoding="utf-8") as f:
-            return (json.load(f) or {}).get("papers") or {}
+            got = (json.load(f) or {}).get("papers") or {}
     except (OSError, ValueError):
         return {}
+    return {k: v for k, v in got.items() if v.get("adopted") is not False}
 
 
 def cite(key: str) -> str:
