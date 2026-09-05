@@ -365,3 +365,67 @@ test('헤드라인만 근거인 주장에는 미확인을 붙이라고 한다', 
   const p = buildPrompt('bull', newsCtx());
   assert.ok(p.includes('미확인'));
 });
+
+// ---------------------------------------------------------------------------
+// 거시 지표 — 한국은행 ECOS
+//
+// 매크로는 모두에게 그럴듯하게 읽히는 재료다. 전원에게 주면 16명이 같은 거시
+// 서사를 반복하고 앙상블이 무너진다. DIANA(할인율)와 RED(가정 심문)만 본다.
+// ---------------------------------------------------------------------------
+
+function macroFixture() {
+  return {
+    ok: true,
+    schema: 'ki.macro/1',
+    source: '한국은행 경제통계시스템(ECOS) — 100대 통계지표',
+    n: 3,
+    stats: [
+      { group: '물가', name: '소비자물가지수', value: 116.2, unit: '2020=100', as_of: '202608' },
+      { group: '통화/금리', name: '한국은행 기준금리', value: 2.5, unit: '연%', as_of: '202608' },
+      { group: '국제수지/환율', name: '원/달러 환율', value: 1382.5, unit: '원', as_of: '20260904' },
+    ],
+  };
+}
+
+test('거시 지표는 DIANA 와 RED 만 본다', () => {
+  const ctx = CTX();
+  ctx.market.kiMacro = macroFixture();
+  const seen = AGENTS.map((a) => a.id).filter((id) =>
+    buildPrompt(id, ctx).includes('[거시 지표 —')
+  );
+  assert.deepEqual(seen.sort(), ['diana', 'red'], `거시를 본 역할: ${seen.join(',')}`);
+});
+
+test('거시가 없으면 아무에게도 블록이 붙지 않는다', () => {
+  const ctx = CTX(); // kiMacro 없음
+  for (const a of AGENTS) {
+    assert.ok(!hasBlock(buildPrompt(a.id, ctx), '[거시 지표'), `${a.id} 에 붙으면 안 된다`);
+  }
+});
+
+test('금리가 물가보다 먼저 온다 — 회수 판단에 더 직접적이다', () => {
+  const ctx = CTX();
+  ctx.market.kiMacro = macroFixture();
+  const p = buildPrompt('diana', ctx);
+  const rate = p.indexOf('한국은행 기준금리');
+  const cpi = p.indexOf('소비자물가지수');
+  assert.ok(rate > 0 && cpi > 0);
+  assert.ok(rate < cpi, '금리가 물가보다 뒤에 왔다');
+});
+
+test('한국은행이 준 통계명·단위·시점을 그대로 싣는다', () => {
+  const ctx = CTX();
+  ctx.market.kiMacro = macroFixture();
+  const p = buildPrompt('red', ctx);
+  assert.ok(p.includes('한국은행 기준금리 2.5 연% (기준 202608)'), p.slice(p.indexOf('[거시'), p.indexOf('[거시') + 300));
+  assert.ok(p.includes('네 기억이 아니라 실측이다'));
+});
+
+test('값이 없는 통계는 싣지 않는다 (0 으로 둔갑시키지 않는다)', () => {
+  const ctx = CTX();
+  const m = macroFixture();
+  m.stats.push({ group: '통화/금리', name: '값 없는 통계', value: null, unit: '%', as_of: '202608' });
+  ctx.market.kiMacro = m;
+  const p = buildPrompt('diana', ctx);
+  assert.ok(!p.includes('값 없는 통계'), '결측 통계가 프롬프트에 실렸다');
+});

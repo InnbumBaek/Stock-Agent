@@ -373,6 +373,23 @@ python ki_monitor.py macro --indent 2
 `facts` 는 네트워크 없이 도는 것이 계약이므로 여기에 섞지 않는다. `quote` 와 같은
 별도 명령이다.
 
+**누가 보는가 — DIANA·RED 만.**
+
+| 역할 | 이 숫자로 무엇을 하는가 |
+|---|---|
+| **DIANA** (기본적) | 금리는 **할인율**이다. 밸류에이션 계산에 직접 들어간다 |
+| **RED** (가정 심문) | "이 판정이 **어떤 금리 국면을 전제**하고 있는가"가 그 역할이다 |
+
+둘은 같은 숫자를 다른 일에 쓴다. 나머지에게 주지 않는 이유는 분업이다 — 매크로는
+모두에게 그럴듯하게 읽히는 재료라, 전원에게 주면 16명이 같은 거시 서사를 반복하고
+앙상블이 무너진다. ACE 는 DIANA 의 리포트로 그 판단을 받는다.
+
+`ki.macro` 를 켜야 돌고, **종목이 아니라 시장 배경이라 런당 한 번만** 조회한다.
+100개를 다 넣지 않는다 — 프롬프트가 통계표가 되면 아무도 안 읽는다. 금리·통화·환율
+순으로 12개를 싣고, 나머지가 있다는 사실만 적는다.
+
+`roster.test.mjs` 가 이 배정을 강제한다.
+
 ### 4.4 설정 (`config.json` 의 `ki` 블록)
 
 ```jsonc
@@ -389,7 +406,10 @@ python ki_monitor.py macro --indent 2
 
     "realtime": false,         // KIS 실시간 시세. **기본 꺼짐** — 켜야 돈다
     "realtimeOrderbook": true, // 호가까지 받을지 (끄면 KIS 호출이 종목당 2→1회)
-    "quoteCacheSec": 20        // 실시간을 분 단위로 묵히면 실시간이 아니다
+    "quoteCacheSec": 20,       // 실시간을 분 단위로 묵히면 실시간이 아니다
+
+    "macro": false,            // 한국은행 ECOS 거시 지표. **기본 꺼짐**
+    "macroCount": 60           // 100대 통계 중 앞에서 몇 개를 받을지
   }
 }
 ```
@@ -688,7 +708,7 @@ python ki_monitor.py report --market KOSPI --with-agents
 
 ```bash
 cd stock-monitor  && python ki_monitor.py selftest    # 104개 (기존 64 + 통합 40)
-cd trading-floor  && npm test                          # 170개 (기존 68 + 통합 102)
+cd trading-floor  && npm test                          # 183개 (기존 68 + 통합 115)
 ```
 
 통합이 지키기로 한 것 중 **테스트가 실제로 강제하는 것**:

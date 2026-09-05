@@ -511,3 +511,96 @@ test('장이 닫혀 있으면 마지막 호가라고 적는다', () => {
   assert.ok(out.includes('마지막 호가'));
   assert.ok(out.includes('체결된다는 뜻이 아니다'));
 });
+
+// ---------------------------------------------------------------------------
+// 거시 재료 (ki.macro/1) — 종목 코드가 없는 유일한 조회
+// ---------------------------------------------------------------------------
+
+function macroJson(over = {}) {
+  return JSON.stringify({
+    ok: true,
+    schema: 'ki.macro/1',
+    source: '한국은행 경제통계시스템(ECOS) — 100대 통계지표',
+    n: 2,
+    stats: [
+      { group: '통화/금리', name: '한국은행 기준금리', value: 2.5, unit: '연%', as_of: '202608' },
+      { group: '국제수지/환율', name: '원/달러 환율', value: 1382.5, unit: '원', as_of: '20260904' },
+    ],
+    ...over,
+  });
+}
+
+test('거시는 꺼져 있으면 파이썬을 스폰하지 않는다 (옵트인)', async () => {
+  reset();
+  const spawn = spyingSpawn({ stdout: macroJson() });
+  ki._setSpawn(spawn);
+  assert.equal(await ki.fetchKiMacro({ cfg: ON }), null, 'ki.macro 없이 돌면 안 된다');
+  assert.equal(spawn.calls.length, 0);
+  reset();
+});
+
+test('거시 기본값은 꺼짐이다', () => {
+  assert.equal(ki.DEFAULT_KI.macro, false);
+  assert.equal(DEFAULTS.ki.macro, false);
+});
+
+test('거시는 종목 코드 없이 macro 서브커맨드를 쓴다', async () => {
+  reset();
+  const spawn = spyingSpawn({ stdout: macroJson() });
+  ki._setSpawn(spawn);
+  const r = await ki.fetchKiMacro({ cfg: { ...ON, macro: true, macroCount: 60 } });
+  assert.equal(r.schema, 'ki.macro/1');
+  const args = spawn.calls[0].args;
+  assert.ok(args.includes('macro'));
+  assert.ok(args.includes('--limit') && args.includes('60'));
+  assert.ok(!args.includes('--code'), '매크로는 종목에 딸린 값이 아니다');
+  reset();
+});
+
+test('거시는 런당 한 번만 조회한다', async () => {
+  reset();
+  const spawn = spyingSpawn({ stdout: macroJson() });
+  ki._setSpawn(spawn);
+  const cfg = { ...ON, macro: true };
+  await ki.fetchKiMacro({ cfg });
+  await ki.fetchKiMacro({ cfg });
+  await ki.fetchKiMacro({ cfg });
+  assert.equal(spawn.calls.length, 1, '캐시가 안 먹었다');
+  reset();
+});
+
+test('거시 조회가 실패하면 null — 분석을 막지 않는다', async () => {
+  reset();
+  ki._setSpawn(
+    spyingSpawn({
+      stdout: JSON.stringify({ ok: false, schema: 'ki.macro/1', reason: 'ECOS_API_KEY 없음' }),
+    })
+  );
+  assert.equal(await ki.fetchKiMacro({ cfg: { ...ON, macro: true } }), null);
+  reset();
+});
+
+test('거시 블록은 한국은행 표기를 그대로 보존한다', () => {
+  const out = ki.formatKiMacroLines(JSON.parse(macroJson())).join('\n');
+  assert.ok(out.startsWith('[거시 지표 — 한국은행'));
+  assert.ok(out.includes('한국은행 기준금리 2.5 연% (기준 202608)'));
+  assert.ok(out.includes('1,382.5 원'), '천 단위 구분이 있어야 읽힌다');
+  assert.ok(out.includes('1차 출처'));
+});
+
+test('거시 블록은 통계표가 되지 않게 잘라 낸다', () => {
+  const many = { ok: true, schema: 'ki.macro/1', stats: [] };
+  for (let i = 0; i < 40; i += 1) {
+    many.stats.push({ group: '기타', name: `통계${i}`, value: i, unit: '', as_of: '202608' });
+  }
+  const out = ki.formatKiMacroLines(many, { limit: 12 });
+  // 헤더 1 + 12줄 + "그 밖에 N개" + 마지막 안내 = 15
+  assert.equal(out.length, 15, out.join('\n'));
+  assert.ok(out.join('\n').includes('그 밖에 28개'));
+});
+
+test('거시가 없으면 블록을 만들지 않는다', () => {
+  assert.deepEqual(ki.formatKiMacroLines(null), []);
+  assert.deepEqual(ki.formatKiMacroLines({ ok: false }), []);
+  assert.deepEqual(ki.formatKiMacroLines({ ok: true, stats: [] }), []);
+});

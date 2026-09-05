@@ -77,6 +77,9 @@ function makeDefaults() {
       realtime: false,
       realtimeOrderbook: true,
       quoteCacheSec: 20,
+      // 거시 재료 (한국은행 ECOS). 기본은 꺼져 있다 — 켜면 런당 한 번 조회한다.
+      macro: false,
+      macroCount: 60,
     },
   };
 }

@@ -1122,6 +1122,7 @@ async function fetchMarket(resolved) {
   let perp = null; // USDT perpetual view used by the scalp desk
   let krCode = null; // KRX 6자리 코드 (KR stocks only)
   let kiQuote = null; // KIS 실시간 시세 (ki.realtime 을 켰을 때만)
+  let kiMacro = null; // 한국은행 거시 통계 (ki.macro 를 켰을 때만)
   let nameKo = resolved.nameKo || null; // 한국어 종목명 — 원장에서 보강될 수 있다
   let ki = null; // 주가 모니터링 원장의 실측값 (ki.enabled 일 때만)
 
@@ -1207,7 +1208,7 @@ async function fetchMarket(resolved) {
     sentiment.lines = ['주식은 공포·탐욕 지수 미적용 — 뉴스 헤드라인으로 심리 판단'];
 
     const perpSym = ((KR_STOCKS[symbol] || {}).perps || {}).binance || null;
-    const [newsR, intraR, boardR, k15R, k1dR, kiR, kqR] = await Promise.allSettled([
+    const [newsR, intraR, boardR, k15R, k1dR, kiR, kqR, kmR] = await Promise.allSettled([
       fetchNews(newsQuery(resolved)),
       fetchYahooIntraday(resolved.yahoo),
       yq && resolved.tapbitPair
@@ -1219,12 +1220,16 @@ async function fetchMarket(resolved) {
       kiBridge.fetchKiFacts(krCode).catch(() => null),
       // 실시간 시세(KIS). ki.realtime 이 꺼져 있으면 즉시 null 이라 비용이 없다.
       kiBridge.fetchKiQuote(krCode).catch(() => null),
+      // 거시 재료(한국은행 ECOS). 종목이 아니라 시장 배경이라 런당 한 번이고,
+      // ki.macro 가 꺼져 있으면 즉시 null 이다.
+      kiBridge.fetchKiMacro().catch(() => null),
     ]);
     if (newsR.status === 'fulfilled') news.headlines = newsR.value;
     if (intraR.status === 'fulfilled') intraday = buildIntraday(intraR.value, '₩');
     if (boardR.status === 'fulfilled') board = boardR.value;
     if (kiR.status === 'fulfilled' && kiR.value) ki = kiR.value;
     if (kqR.status === 'fulfilled' && kqR.value) kiQuote = kqR.value;
+    if (kmR.status === 'fulfilled' && kmR.value) kiMacro = kmR.value;
 
     // KR_STOCKS 밖 종목은 USDT 무기한 계약이 없다. 없다는 사실을 적어 두지 않으면
     // 20배 레벨을 정규장 차트로 설계하게 되고, 그 순간 판정이 통째로 틀어진다.
@@ -1330,6 +1335,7 @@ async function fetchMarket(resolved) {
     ...(krCode ? { krCode } : {}),
     ...(ki ? { ki } : {}),
     ...(kiQuote ? { kiQuote } : {}),
+    ...(kiMacro ? { kiMacro } : {}),
   };
 }
 

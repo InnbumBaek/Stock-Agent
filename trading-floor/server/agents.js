@@ -97,6 +97,26 @@ const KI_SECTIONS = {
 // 역할의 재료이고, 여러 명이 같은 것을 보면 의견이 상관되고 전담이 사라진다.
 const KI_MICRO_IDS = new Set(['flow']);
 
+// 거시 지표는 DIANA·RED 만 본다.
+//
+// DIANA 는 밸류에이션을 맡는다 — 금리는 할인율이라 그 계산에 직접 들어간다.
+// RED 는 가정을 심문한다 — "이 판정이 어떤 금리 국면을 전제하고 있는가"가
+// 정확히 그 역할이다. 둘은 같은 숫자를 다른 일에 쓴다.
+//
+// 나머지에게 주지 않는 이유는 분업이다. 매크로는 모두에게 그럴듯하게 읽히는
+// 재료라, 전원에게 주면 16명이 같은 거시 서사를 반복하고 앙상블이 무너진다.
+// ACE 는 DIANA 의 리포트로 그 판단을 받는다.
+const KI_MACRO_IDS = new Set(['diana', 'red']);
+
+function kiMacroLines(market, agentId) {
+  if (!KI_MACRO_IDS.has(agentId) || !market || !market.kiMacro) return [];
+  try {
+    return kiBridge.formatKiMacroLines(market.kiMacro);
+  } catch (_) {
+    return []; // 서식이 깨져도 프롬프트 생성을 막지 않는다
+  }
+}
+
 function kiMicroLines(market, agentId) {
   if (!KI_MICRO_IDS.has(agentId) || !market || !market.kiQuote) return [];
   try {
@@ -152,7 +172,7 @@ function kiLines(market, agentId) {
       staleWarnDays: cfg.staleWarnDays,
       detail: KI_DETAIL[agentId] || 'standard',
       sections: KI_SECTIONS[agentId],
-    }).concat(kiMicroLines(market, agentId));
+    }).concat(kiMicroLines(market, agentId), kiMacroLines(market, agentId));
   } catch (_) {
     return []; // 서식이 깨져도 프롬프트 생성을 막지 않는다
   }

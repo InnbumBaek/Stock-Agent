@@ -32,9 +32,17 @@ if errorlevel 1 (
 
 where claude >nul 2>&1
 if errorlevel 1 (
-  echo  [!] claude CLI 가 없습니다. 데모 모드로만 돌아갑니다.
-  echo      브라우저 주소 끝에 ?demo=1 을 붙이십시오:
+  echo  [!] claude CLI 가 없습니다. 지금은 데모 모드로만 돌아갑니다.
+  echo.
+  echo      브라우저 주소 끝에 ?demo=1 을 붙이면 가짜 응답으로 화면이 돕니다:
   echo        http://localhost:8000/?demo=1
+  echo.
+  echo      진짜 에이전트를 돌리시려면 - 관리자 PowerShell 에서:
+  echo        npm install -g @anthropic-ai/claude-code
+  echo      그 다음 아무 창에서나:
+  echo        claude
+  echo      한 번 실행하면 브라우저로 로그인 절차가 뜹니다. 로그인 뒤
+  echo      이 창을 닫고 다시 여십시오.
   echo.
 ) else (
   echo  [O] claude CLI 확인

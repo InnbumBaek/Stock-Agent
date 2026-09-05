@@ -11,7 +11,7 @@ AI 에이전트들이 시장 데이터를 분석하고 토론해 매매 판정�
 node server/server.js          # http://localhost:8000
 # 포트 충돌 시: PORT=8123 node server/server.js
 # Windows: start-floor.cmd 더블클릭
-npm test                       # 170개 단위 테스트
+npm test                       # 183개 단위 테스트
 ```
 
 의존성 설치 불필요 — `package.json`에 dependencies가 없고 Node 내장 모듈만 쓴다.
@@ -72,6 +72,11 @@ reports/          런마다 마크다운 리포트 + 같은 이름의 .json(기�
 - 주식: Yahoo Finance chart API
 - 뉴스: Google News RSS (한국어)
 - 환율: Yahoo `KRW=X` → 실패 시 open.er-api.com
+
+**한국은행 ECOS (키 필요 · 기본 꺼짐)** — `ki.macro` 를 켤 때만. 금리·환율·물가를
+중앙은행 공식 통계로 받는다. **DIANA(할인율)·RED(가정 심문)만** 본다 — 매크로는
+모두에게 그럴듯하게 읽혀서, 전원에게 주면 16명이 같은 거시 서사를 반복한다.
+종목이 아니라 시장 배경이라 런당 한 번만 조회한다.
 
 **한국투자증권 KIS (키 필요 · 기본 꺼짐)** — `ki.realtime` 을 켤 때만. 원장이 일별
 종가라 며칠 묵을 수 있는 그 신선도만 메운다. 현재가는 시세 줄로 전원이 보고, 호가·

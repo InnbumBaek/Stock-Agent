@@ -64,6 +64,14 @@ const DEFAULT_KI = {
   realtimeOrderbook: true,
   // 실시간은 오래 캐시하면 실시간이 아니게 된다. 초 단위로 따로 둔다.
   quoteCacheSec: 20,
+
+  // 거시 재료 (한국은행 ECOS 100대 통계). **기본은 꺼져 있다.**
+  //
+  // 에이전트가 금리·환율을 이야기할 때 그 숫자가 언어모델의 기억에서 나오면
+  // 아무도 추적할 수 없다. 중앙은행 공식 통계로 바꾸는 스위치다.
+  // 종목별이 아니라 런당 한 번 조회한다 — 매크로는 종목에 딸린 값이 아니다.
+  macro: false,
+  macroCount: 60, // 100대 통계 중 앞에서 몇 개를 받을지
 };
 
 // 저장소 배치상 server/ 의 두 단계 위가 저장소 루트다.
@@ -285,6 +293,70 @@ async function fetchKiQuote(codeOrSymbol, opts = {}) {
     ],
     Math.max(1, Number(cfg.quoteCacheSec || 20)) * 1000
   );
+}
+
+/**
+ * 거시 재료 (ki.macro/1) — 한국은행 100대 통계.
+ *
+ * 종목 코드가 없는 유일한 조회다. 매크로는 종목에 딸린 값이 아니라 시장 전체의
+ * 배경이므로 런당 한 번만 부른다.
+ *
+ * `ki.macro` 를 켜야 돈다. 키가 없거나 조회가 실패하면 null 이고, 그때 에이전트는
+ * 거시 블록 없이 판단한다 — 없는 숫자를 채워 주지 않는다.
+ */
+async function fetchKiMacro(opts = {}) {
+  const cfg = loadKiCfg(opts.cfg);
+  if (!cfg.enabled || !cfg.macro) return null;
+
+  const cacheKey = 'macro:_';
+  const cached = cacheGet(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const script = scriptPath(cfg);
+  if (!fs.existsSync(script)) {
+    cacheSet(cacheKey, null, NEG_TTL_MS);
+    return null;
+  }
+  const args = [script, 'macro', '--limit',
+    String(Math.max(1, Math.min(Number(cfg.macroCount || 60), 100)))];
+  const timeoutMs = Math.max(1000, Number(cfg.timeoutSec || 30) * 1000);
+  const cwd = path.dirname(script);
+
+  let lastNote = '';
+  for (const bin of pythonCandidates(cfg)) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await runOnce(bin, args, cwd, timeoutMs);
+    if (r.spawnError) {
+      if (r.spawnError.code === 'ENOENT') {
+        lastNote = `'${bin}' 실행 파일 없음`;
+        continue;
+      }
+      lastNote = `${bin}: ${r.spawnError.message}`;
+      break;
+    }
+    if (r.timedOut) {
+      lastNote = `${bin}: ${cfg.timeoutSec}초 안에 끝나지 않아 중단`;
+      break;
+    }
+    let parsed = null;
+    try {
+      parsed = JSON.parse(r.stdout);
+    } catch (_) {
+      lastNote = `${bin}: JSON 이 아닌 응답`;
+      break;
+    }
+    if (!parsed || parsed.ok !== true) {
+      console.error(`[ki] 거시 재료 없음 — ${(parsed && parsed.reason) || '알 수 없는 이유'}`);
+      cacheSet(cacheKey, null, NEG_TTL_MS);
+      return null;
+    }
+    // 매크로는 월·분기 단위 통계다. 자주 다시 부를 이유가 없다.
+    cacheSet(cacheKey, parsed, Math.max(60, Number(cfg.cacheMin || 30) * 60) * 1000);
+    return parsed;
+  }
+  console.error(`[ki] 거시 재료 조회 실패 — ${lastNote || '알 수 없는 이유'}`);
+  cacheSet(cacheKey, null, NEG_TTL_MS);
+  return null;
 }
 
 // facts·candles·quote 가 공유하는 실행부. 종류(kind)별로 캐시를 나눈다.
@@ -741,6 +813,50 @@ function formatKiMicroLines(quotePayload) {
   return out;
 }
 
+/**
+ * 거시 블록 — 한국은행 공식 통계. **DIANA·RED 전용 재료다.**
+ *
+ * 통계명을 한국은행이 준 그대로 싣는다. 이쪽에서 '기준금리'라고 고쳐 쓰면
+ * "한국은행이 이렇게 말했다"가 아니라 "우리가 이렇게 불렀다"가 된다.
+ *
+ * 100개를 다 넣지 않는다 — 프롬프트가 통계표가 되면 아무도 안 읽는다.
+ * 회수 판단에 닿는 그룹만 고르고, 나머지가 있다는 사실만 적는다.
+ */
+function formatKiMacroLines(macroPayload, opts = {}) {
+  const p = macroPayload;
+  if (!p || p.ok !== true || !Array.isArray(p.stats) || !p.stats.length) return [];
+
+  const limit = Math.max(1, Number(opts.limit || 12));
+  // 회수 시점 판단에 닿는 순서. 금리가 먼저다 — 할인율과 자금 조달을 동시에 흔든다.
+  const PRIORITY = ['금리', '통화', '환율', '국제수지', '물가', '국민계정', '경기', '고용'];
+  const rank = (g) => {
+    const i = PRIORITY.findIndex((k) => String(g || '').includes(k));
+    return i < 0 ? PRIORITY.length : i;
+  };
+  const picked = p.stats
+    .filter((s) => s && s.name && s.value != null)
+    .sort((a, b) => rank(a.group) - rank(b.group))
+    .slice(0, limit);
+  if (!picked.length) return [];
+
+  const out = ['[거시 지표 — 한국은행 경제통계시스템(ECOS) · 1차 출처]'];
+  for (const s of picked) {
+    const v = Number(s.value);
+    const val = Number.isFinite(v) ? v.toLocaleString('en-US') : String(s.value);
+    // 단위 앞에 반드시 공백을 둔다. 붙이면 '116.22020=100' 처럼 읽힌다
+    // ('2.5연%' 는 붙여도 읽히지만 '2020=100' 같은 단위가 섞여 있다).
+    out.push(
+      `  ${s.name} ${val}${s.unit ? ` ${s.unit}` : ''}` +
+        (s.as_of ? ` (기준 ${s.as_of})` : '') +
+        (s.group ? ` · ${s.group}` : '')
+    );
+  }
+  const rest = p.stats.length - picked.length;
+  if (rest > 0) out.push(`  그 밖에 ${rest}개 통계가 더 있다 — 필요하면 원장에서 확인하라.`);
+  out.push('  통계명·단위·시점은 한국은행이 준 그대로다. 이 값은 네 기억이 아니라 실측이다.');
+  return out;
+}
+
 // 테스트 주입구 — 실제 파이썬 없이 스폰 동작을 검증하기 위한 것.
 function _setSpawn(fn) {
   spawnImpl = typeof fn === 'function' ? fn : spawn;
@@ -755,7 +871,9 @@ module.exports = {
   fetchKiFacts,
   fetchKiCandles,
   fetchKiQuote,
+  fetchKiMacro,
   formatKiLines,
+  formatKiMacroLines,
   formatKiQuoteLine,
   formatKiMicroLines,
   formatKiPriceLine,
