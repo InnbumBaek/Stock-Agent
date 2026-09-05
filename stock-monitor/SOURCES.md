@@ -30,6 +30,43 @@ KIS 는 **시세 조회 두 개만** 화이트리스트에 있습니다. 같은 
 KRX는 인증키 발급과 별개로 **서비스별 URL 사용신청**이 필요합니다.
 신청하지 않은 서비스는 키가 유효해도 401을 돌려줍니다.
 
+## 1-1. 응답 필드를 무엇과 대조했는가
+
+"API 가 된다"와 "내가 읽는 필드가 맞다"는 다른 문제입니다. 호출이 200 으로
+성공해도 필드 이름을 하나 잘못 적으면 그 값은 조용히 `None` 이 되고, 리포트에는
+"데이터 없음"이 찍힙니다. **틀렸다는 신호가 어디에도 뜨지 않습니다.**
+
+그래서 각 기관의 공식 예제 코드에서 응답 필드 목록을 뽑아 `api_fields.json` 에
+얼려 두고, `selftest` 가 매번 "내 매핑이 그 안에 있는가"를 검사합니다.
+네트워크는 필요 없습니다.
+
+| 출처 | 대조 대상 | 근거의 성격 |
+|---|---|---|
+| KRX 일별매매 | 실응답 대조 2026-08-13 · stk_bydd_trd basDd=20260812 (942건) | 실응답 직접 대조 (공식 예제 저장소 없음) |
+| DART | PyPI OpenDartReader 0.3.3 · opendartreader/*.py | 해당 기관 API 전용 표준 클라이언트 |
+| ECOS 100대 통계 | PyPI PublicDataReader 1.1.1.post2 · PublicDataReader/ecos/ecos.py | 해당 기관 API 전용 표준 클라이언트 |
+| KIS 현재가 | github.com/koreainvestment/open-trading-api @main · examples_llm/domestic_stock/inquire_price/chk_inquire_price.py | 기관 공식 예제 |
+| KIS 호가 | github.com/koreainvestment/open-trading-api @main · examples_llm/domestic_stock/inquire_asking_price_exp_ccn/chk_inquire_asking_price_exp_ccn.py | 기관 공식 예제 |
+| FRED 관측치 | PyPI fredapi 0.5.2 · fredapi/fred.py | 해당 기관 API 전용 표준 클라이언트 |
+
+목록 갱신 (인터넷 필요):
+
+```bash
+python docs/fetch_api_spec.py
+```
+
+KRX 만 근거가 다릅니다. 이 신 Open API 전용 공식 예제도, 표준 클라이언트도
+없습니다 — 널리 쓰이는 `pykrx` 는 구 `data.krx.co.kr` 화면용 엔드포인트를 쓰는
+**다른 API** 입니다. 그래서 KRX 는 실제 응답을 받아 대조한 기록을 얼려 두었고,
+거기서 두 가지를 검산했습니다 — 거래대금÷거래량이 고가·저가 범위 안에 들어오는지,
+종가 × 상장주식수 = 시가총액 항등식이 성립하는지.
+
+**대조했다는 것이 값이 맞다는 뜻은 아닙니다.** 이름이 맞아도 실제 값이
+상식적인지는 한 번 받아 봐야 압니다. 그래서 KIS·ECOS 는 `verified=False` 로 두고,
+`check-auth` 가 "명세 대조 완료 · 실응답 미대조" 라고 그대로 적습니다.
+
+---
+
 ## 2. 의도적으로 제외한 것
 
 아래는 FRED로 받아볼 수는 있으나 **저작권이 제3자에게 있어 기본값에서 제외**했습니다.

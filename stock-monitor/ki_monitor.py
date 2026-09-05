@@ -131,7 +131,12 @@ def has_key(name: str) -> bool:
 # 필드 순서·이름 오류는 예외를 내지 않고 '그럴듯한 숫자'를 만듭니다.
 
 KRX = {
-    "base_url": "http://data-dbg.krx.co.kr/svc/apis",
+    # 인증키를 AUTH_KEY 헤더로 보냅니다. 평문 HTTP 로 보내면 그 키가 경로
+    # 어디에서든 그대로 읽힙니다 — 사내 프록시를 통과할 때도 마찬가지입니다.
+    # 그래서 HTTPS 를 먼저 시도하고, 연결 자체가 안 될 때만 HTTP 로 내려갑니다.
+    # 내려갈 때는 그 사실을 stderr 에 적습니다. 조용히 평문으로 바뀌면 안 됩니다.
+    "base_url": "https://data-dbg.krx.co.kr/svc/apis",
+    "fallback_base_url": "http://data-dbg.krx.co.kr/svc/apis",
     "auth_header": "AUTH_KEY",
     "date_param": "basDd",
     # 2026-08-13 실응답 대조 완료 (stk_bydd_trd, basDd=20260812, 942건):
@@ -241,10 +246,15 @@ KIS = {
     #     ② 토큰 만료를 expires_in 으로만 읽었습니다. 공식은
     #        access_token_token_expired 를 씁니다. 둘 다 봅니다.
     #
+    # 이 대조는 한 번 하고 끝나지 않습니다. 공식 예제에서 뽑은 필드 목록을
+    # api_fields.json 에 얼려 두고, selftest 가 매번 "내 매핑이 그 안에
+    # 있는가"를 검사합니다 (네트워크 불필요). 목록 갱신은
+    # docs/fetch_api_spec.py 가 합니다.
+    #
     # 그래도 verified 는 False 입니다. 명세가 맞아도 실제 값이 상식적인지는
     # 한 번 받아 봐야 압니다. kis_sanity 가 매 호출 검산합니다.
     "verified": False,
-    "spec_checked": "2026-09-05 · 한국투자증권 공식 예제 저장소",
+    "spec_checked": "2026-09-05 · github.com/koreainvestment/open-trading-api @main · examples_llm/domestic_stock/inquire_price/chk_inquire_price.py",
     "quote_api_exists": True,
     "token_cache": ".kis_token.json",   # 프로세스가 매번 새로 뜨므로 파일에 캐시
     "allowed": {
@@ -432,29 +442,93 @@ def _requests():
 
 
 # ── KRX ───────────────────────────────────────────────────────────────
+# ── 공식 명세 대조 ────────────────────────────────────────────────────
+#
+# "API 가 된다"와 "내가 읽는 필드가 맞다"는 다른 문제입니다. 호출이 200 으로
+# 성공해도 필드 이름을 하나 잘못 적으면 그 값은 조용히 None 이 되고, 리포트에는
+# "데이터 없음"이 찍힙니다. 틀렸다는 신호가 어디에도 뜨지 않습니다.
+#
+# 그래서 각 기관의 공식 예제 코드에서 뽑은 응답 필드 목록을 api_fields.json 에
+# 얼려 두고, selftest 가 매번 "내 매핑이 그 안에 있는가"를 검사합니다.
+# 네트워크는 필요 없습니다. 목록 갱신은 docs/fetch_api_spec.py 가 합니다.
+
+API_FIELDS_PATH = ROOT / "api_fields.json"
+
+
+def api_spec() -> dict:
+    """얼려 둔 공식 필드 목록. 파일이 없으면 빈 dict 를 돌려줍니다."""
+    try:
+        with io.open(API_FIELDS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def spec_fields(key: str) -> set:
+    """출처 하나의 응답 필드 집합. 기록이 없으면 빈 집합입니다."""
+    src = (api_spec().get("sources") or {}).get(key) or {}
+    return set(src.get("fields") or [])
+
+
+# 어느 주소로 붙었는지 한 번 정해지면 그대로 씁니다. 매 호출 다시 재 보면
+# 느리기도 하고, 중간에 몰래 평문으로 바뀌는 것을 못 보게 됩니다.
+_KRX_BASE = {"url": None}
+
+
+def krx_base_url() -> str:
+    """확정된 KRX 주소. 아직 안 정해졌으면 HTTPS 를 돌려줍니다."""
+    return _KRX_BASE["url"] or KRX["base_url"]
+
+
 def krx_get(service: str, bas_dd: str, retries: int = 3):
     requests = _requests()
     svc = KRX["services"][service]
-    url = f"{KRX['base_url']}/{svc['group']}/{service}"
     headers = {KRX["auth_header"]: api_key("KRX_API_KEY")}
     params = {KRX["date_param"]: bas_dd}
+
+    # 이미 정해졌으면 그것만. 아직이면 HTTPS → HTTP 순으로 봅니다.
+    bases = ([_KRX_BASE["url"]] if _KRX_BASE["url"]
+             else [KRX["base_url"], KRX["fallback_base_url"]])
     last = None
-    for i in range(retries):
-        try:
-            r = requests.get(url, headers=headers, params=params, timeout=20)
+    for base in bases:
+        url = f"{base}/{svc['group']}/{service}"
+        reachable = False       # 이 주소로 응답 자체는 받아 봤는가
+        for i in range(retries):
+            try:
+                r = requests.get(url, headers=headers, params=params, timeout=20)
+            except (requests.ConnectionError, requests.Timeout) as e:
+                # 연결이 안 됩니다. 재시도하고, 그래도 안 되면 다음 주소로.
+                last = e
+                time.sleep(1.5 * (i + 1))
+                continue
+
+            # 여기까지 왔으면 이 주소로는 붙습니다. 응답이 나쁜 것은 주소를
+            # 바꿔서 될 일이 아니므로, 다음 주소로 넘어가지 않습니다.
+            reachable = True
+            if _KRX_BASE["url"] is None:
+                _KRX_BASE["url"] = base
+                if base.startswith("http://"):
+                    print("  [경고] KRX 에 HTTPS 로 붙지 못해 평문 HTTP 로 "
+                          "내려갔습니다. 인증키가 평문으로 나갑니다 — "
+                          "사내망이라면 전산팀에 443 개방을 요청하십시오.",
+                          file=sys.stderr)
             if r.status_code == 401:
                 raise RuntimeError(
-                    f"401 — '{service}' 의 URL 사용신청이 되어 있는지 확인하십시오. "
-                    "인증키 발급만으로는 호출되지 않습니다.")
-            r.raise_for_status()
-            body = r.json()
+                    f"401 — '{service}' 의 URL 사용신청이 되어 있는지 "
+                    "확인하십시오. 인증키 발급만으로는 호출되지 않습니다.")
+            try:
+                r.raise_for_status()
+                body = r.json()
+            except (requests.RequestException, ValueError) as e:
+                last = e
+                time.sleep(1.5 * (i + 1))
+                continue
             for k in ("OutBlock_1", "output", "data", "OutBlock"):
                 if k in body:
                     return body[k]
             return body if isinstance(body, list) else []
-        except requests.RequestException as e:
-            last = e
-            time.sleep(1.5 * (i + 1))
+        if reachable:
+            break               # 붙긴 했으니 주소 문제가 아닙니다
     raise RuntimeError(f"KRX 호출 실패: {service} {bas_dd}") from last
 
 
@@ -905,7 +979,7 @@ ECOS = {
     "base_url": "https://ecos.bok.or.kr/api",
     # KIS 와 같습니다 — 명세는 대조했고 실응답은 아직입니다.
     "verified": False,
-    "spec_checked": "2026-09-05 · 한국은행 Open API 명세 및 표준 클라이언트",
+    "spec_checked": "2026-09-05 · PyPI PublicDataReader 1.1.1.post2 · PublicDataReader/ecos/ecos.py",
     "allowed": {"key_stats": "KeyStatisticList"},   # 읽기 전용. 조회 하나뿐입니다
     "lang": "kr",
     "max_rows": 100,
@@ -4822,6 +4896,39 @@ def selftest() -> int:
         KIS["verified"] is False and ECOS["verified"] is False))
     check("명세 대조 기록은 남아 있다", lambda: _assert(
         bool(KIS.get("spec_checked")) and bool(ECOS.get("spec_checked"))))
+
+    # ── 공식 필드 목록과의 대조 ──────────────────────────────────────
+    #
+    # 아래 검사들이 api_fields.json 을 읽습니다. 파일이 없으면 통과가 아니라
+    # **실패**입니다 — 대조하지 않은 것을 대조했다고 넘기면 이 검사가 있으나
+    # 마나이기 때문입니다.
+    check("공식 필드 목록(api_fields.json)이 있다", lambda: _assert(
+        bool(api_spec().get("sources"))))
+    check("KRX 는 HTTPS 로 먼저 붙는다 (인증키가 헤더로 나갑니다)", lambda: _assert(
+        KRX["base_url"].startswith("https://")
+        and krx_base_url().startswith("https://")))
+    check("KIS 현재가 매핑이 공식 예제 필드 안에 있다", lambda: _assert(
+        {k for k, v in KIS["field_map"].items()
+         if v not in ("bid", "ask", "bid_qty", "ask_qty")}
+        <= spec_fields("kis.quote")))
+    check("KIS 호가 매핑이 공식 예제 필드 안에 있다", lambda: _assert(
+        {k for k, v in KIS["field_map"].items()
+         if v in ("bid", "ask", "bid_qty", "ask_qty")}
+        <= spec_fields("kis.orderbook")))
+    check("KIS 경로·tr_id 가 공식 예제와 같다", lambda: _assert(
+        all((api_spec()["sources"][f"kis.{k}"]["path"] == KIS["allowed"][k]
+             and api_spec()["sources"][f"kis.{k}"]["tr_id"] == KIS["tr_id"][k])
+            for k in ("quote", "orderbook"))))
+    check("ECOS 가 읽는 다섯 필드가 공식 목록 안에 있다", lambda: _assert(
+        {"CLASS_NAME", "KEYSTAT_NAME", "DATA_VALUE", "CYCLE", "UNIT_NAME"}
+        <= spec_fields("ecos.key_stats")))
+    check("KRX 일별매매 매핑이 실응답 기록 안에 있다", lambda: _assert(
+        set(KRX["field_map"]["bydd_trd"]) <= spec_fields("krx.bydd_trd")))
+    check("DART 엔드포인트 이름이 표준 클라이언트와 어긋나지 않는다", lambda: _assert(
+        _dart_endpoint_conflicts() == []))
+    check("FRED 주소가 표준 클라이언트와 같다", lambda: _assert(
+        FRED["base_url"] ==
+        (api_spec()["sources"]["fred.observations"]["base"])))
     check("ECOS 는 조회 하나뿐 (읽기 전용)", lambda: _assert(
         set(ECOS["allowed"]) == {"key_stats"}))
     check("실시간 스냅샷은 원장에 쓰지 않는다", lambda: _assert(
@@ -5674,6 +5781,23 @@ def _diag_fred() -> tuple[bool, str, str]:
         return True, f"미 국채 10년 {len(s)}일치", ""
     except Exception as e:                              # noqa: BLE001
         return False, str(e)[:70], "fredaccount.stlouisfed.org/apikeys 에서 키를 확인하십시오."
+
+
+def _dart_endpoint_conflicts() -> list:
+    """DART 엔드포인트 이름이 표준 클라이언트와 **대소문자만 다른** 경우를 찾습니다.
+
+    이 API 는 경로가 대소문자를 가립니다. corpCode.xml 을 corpcode.xml 로
+    적으면 404 가 나는데, 그 404 는 "키가 잘못됐나" 처럼 읽힙니다.
+    양쪽에 다 있는 이름만 봅니다 — 한쪽에만 있는 것은 그쪽이 안 쓰는 것뿐이라
+    틀린 것이 아닙니다."""
+    ref = (api_spec().get("sources", {}).get("dart") or {}).get("endpoints") or []
+    lower = {e.lower(): e for e in ref}
+    bad = []
+    for name, _kind in DART["endpoints"].values():
+        ref_name = lower.get(name.lower())
+        if ref_name and ref_name != name:
+            bad.append(f"{name} != {ref_name}")
+    return sorted(bad)
 
 
 def cmd_diagnose() -> int:

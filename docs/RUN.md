@@ -74,7 +74,7 @@ pip install pandas numpy scipy requests lxml
 
 ```bash
 cd stock-monitor
-python ki_monitor.py selftest        # 108개 통과해야 정상
+python ki_monitor.py selftest        # 117개 통과해야 정상
 
 cd ../trading-floor
 npm test                             # 193개 통과해야 정상
