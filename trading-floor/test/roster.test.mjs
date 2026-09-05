@@ -429,3 +429,58 @@ test('값이 없는 통계는 싣지 않는다 (0 으로 둔갑시키지 않는�
   const p = buildPrompt('diana', ctx);
   assert.ok(!p.includes('값 없는 통계'), '결측 통계가 프롬프트에 실렸다');
 });
+
+// ---------------------------------------------------------------------------
+// 리스크 위원회 — 성향 심사는 서로를 기다리지 않는다
+//
+// 셋을 줄 세우면 뒤 사람이 앞 사람 리포트를 읽고 시작해 의견이 상관된다.
+// 그건 FLOW·FILING·RED 를 나눌 때 쓴 것과 같은 논리다. 독립된 세 의견을
+// NEUTRAL 이 중재하는 쪽이 빠르면서 판정으로도 낫다.
+// ---------------------------------------------------------------------------
+
+const { RISK_ORDER, RISK_ARBITER_IDS } = require('../server/engine.js');
+
+test('중재자는 NEUTRAL 하나뿐이다', () => {
+  assert.deepEqual([...RISK_ARBITER_IDS], ['neutral']);
+});
+
+test('NEUTRAL 만 앞선 심사를 인용하라고 지시받는다', () => {
+  // 이 지시문이 있는 역할만 뒤에 와야 한다. 근거와 구현이 어긋나면
+  // 병렬화가 판정을 조용히 바꾼다.
+  const ctx = CTX();
+  const cites = ['risky', 'safe', 'red', 'neutral'].filter((id) =>
+    buildPrompt(id, ctx).includes('앞선 심사자들의 주장을 각각 인용')
+  );
+  assert.deepEqual(cites, ['neutral']);
+  for (const id of cites) assert.ok(RISK_ARBITER_IDS.has(id), `${id} 는 중재자여야 한다`);
+});
+
+test('명단 순서는 그대로다 — 회의 자료의 위원 순서가 바뀌면 비교가 안 된다', () => {
+  assert.deepEqual(RISK_ORDER, ['risky', 'safe', 'red', 'neutral']);
+  const independents = RISK_ORDER.filter((id) => !RISK_ARBITER_IDS.has(id));
+  const arbiters = RISK_ORDER.filter((id) => RISK_ARBITER_IDS.has(id));
+  assert.deepEqual(independents, ['risky', 'safe', 'red'], '동시에 돌 셋');
+  assert.deepEqual(arbiters, ['neutral'], '뒤에 올 중재자');
+});
+
+// ---------------------------------------------------------------------------
+// 모델 계층 — 정리하는 일과 판정하는 일은 요구가 다르다
+// ---------------------------------------------------------------------------
+
+const { modelFor } = require('../server/agents.js');
+
+test('판정·토론은 깊은 모델, 재료 정리는 빠른 모델', () => {
+  for (const id of ['ace', 'pm', 'red', 'bull', 'bear']) {
+    assert.equal(modelFor(id), 'opus', `${id} 는 판정에 직결된다`);
+  }
+  for (const id of ['taro', 'diana', 'flow', 'filing', 'nova', 'vibe',
+    'risky', 'safe', 'neutral', 'blitz', 'guard']) {
+    assert.equal(modelFor(id), 'sonnet', `${id} 는 재료 정리다`);
+  }
+});
+
+test('16명 전원이 모델을 배정받는다 — 빠뜨리면 조용히 기본값이 된다', () => {
+  for (const a of AGENTS) {
+    assert.ok(['opus', 'sonnet'].includes(modelFor(a.id)), `${a.id}: ${modelFor(a.id)}`);
+  }
+});

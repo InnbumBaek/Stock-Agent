@@ -27,6 +27,25 @@ function filterByKi(ids, market) {
 // FLOW·FILING 은 원장 실측이 있어야 볼 것이 있다. 없으면 아래 filterByKi 가 뺀다.
 const ANALYST_IDS = ['taro', 'diana', 'flow', 'filing', 'nova', 'vibe'];
 const DEBATE_ORDER = ['bull', 'bear', 'bull', 'bear'];
+
+// 토론 턴 수 — 기본 4(각 2회)는 논문 구조 그대로입니다. 바꾸지 않으면 판정도
+// 바뀌지 않습니다.
+//
+// 다만 이 4턴이 한 종목 대기 시간의 절반 이상입니다. 순차일 수밖에 없기
+// 때문입니다 — 상대 말을 받아야 반박이 성립합니다. 그래서 여기만은 속도와
+// 깊이를 사람이 고르게 열어 둡니다.
+//
+//   config.json:  { "debateTurns": 2 }   또는  FLOOR_DEBATE_TURNS=2
+//
+// 짝수로 맞춥니다. 홀수면 한쪽이 마지막 말을 하고 끝나 반박 없이 남습니다.
+function debatePlan(turns) {
+  const n = Number(turns);
+  if (!Number.isFinite(n) || n < 2) return DEBATE_ORDER;
+  const even = Math.max(2, Math.min(8, Math.floor(n / 2) * 2));
+  const out = [];
+  for (let i = 0; i < even; i += 1) out.push(i % 2 === 0 ? 'bull' : 'bear');
+  return out;
+}
 const SCALP_ORDER = ['blitz', 'guard']; // 순차: guard는 blitz 결과를 받음
 
 // 모드별 파이프라인 구성
@@ -40,10 +59,14 @@ const SCALP_ORDER = ['blitz', 'guard']; // 순차: guard는 blitz 결과를 받�
 // 마지막 바로 앞에 둔다.
 const RISK_ORDER = ['risky', 'safe', 'red', 'neutral'];
 
+// 중재자 — 앞선 심사를 인용해야 하므로 나머지가 끝난 뒤에 돈다.
+// 나머지 셋은 고정 성향이라 서로를 기다릴 이유가 없다.
+const RISK_ARBITER_IDS = new Set(['neutral']);
+
 const MODES = {
   algo: {
     analysts: ANALYST_IDS,
-    debate: DEBATE_ORDER,
+    debate: DEBATE_ORDER,   // 실행 시 debatePlan 으로 덮어씁니다
     scalp: [],
     risk: RISK_ORDER, // ACE 1차 판정 → 리스크 위원회 → PM 최종 승인
     pm: true,
@@ -450,6 +473,18 @@ class Engine extends EventEmitter {
     const mock = !!opts.mock;
     const mode = MODES[opts.mode] ? opts.mode : 'algo';
     const plan = MODES[mode];
+    // 토론 턴 수만 설정으로 갈아끼웁니다. 안 주면 논문 구조 그대로 4턴입니다.
+    if (plan.debate.length) {
+      let turns = null;
+      try {
+        // eslint-disable-next-line global-require
+        turns = (require('./config').loadConfig() || {}).debateTurns;
+      } catch (_) {
+        turns = null;
+      }
+      if (turns == null) turns = process.env.FLOOR_DEBATE_TURNS;
+      plan.debate = debatePlan(turns);
+    }
     let resolved = null;
     let market = null;
     const analystResults = []; // [{id, name, bubble, report}] — 렌더/저장용
@@ -653,10 +688,19 @@ class Engine extends EventEmitter {
         scalp: dec.scalp,
       };
       // 리스크 위원회는 트레이더 계획의 진입가 기준 청산가까지 함께 본다.
+      //
+      // 성향 심사(RISKY·SAFE·RED)는 서로를 기다리지 않는다. 셋을 줄 세우면
+      // 뒤 사람이 앞 사람 리포트를 읽고 시작해 의견이 상관되고 — 앙상블의
+      // 이점이 사라진다 — 대기 단계만 둘 더 늘어난다. 독립된 세 의견을
+      // NEUTRAL 이 중재하는 쪽이 빠르면서 판정으로도 낫다.
+      //
+      // NEUTRAL 만 뒤에 온다. 그 역할의 지시문이 "앞선 심사자들의 주장을 각각
+      // 인용해"이므로, 앞의 셋이 끝나야 성립한다.
       const riskIds = filterByKi(plan.risk, market);
       const riskInfoPlan = riskIds.length ? this._buildRiskInfo(market, traderPlan) : null;
       if (riskIds.length) this._log('── 리스크 위원회 심사 ──', 'stage');
-      for (const id of riskIds) {
+
+      const runRisk = async (id) => {
         this._emit({ type: 'agent:start', id });
         try {
           const res = await runAgent(
@@ -682,6 +726,18 @@ class Engine extends EventEmitter {
           riskReports[id] = report;
           riskResults.push({ id, name: metaLabel(id), bubble, report });
         }
+      };
+
+      const arbiters = riskIds.filter((id) => RISK_ARBITER_IDS.has(id));
+      const independents = riskIds.filter((id) => !RISK_ARBITER_IDS.has(id));
+      // 한 명이 실패해도 나머지는 계속한다 (runRisk 가 스스로 삼킨다).
+      await Promise.all(independents.map(runRisk));
+      // 리포트가 도착한 순서가 아니라 명단 순서로 읽히게 정렬한다 —
+      // 회의 자료에서 위원 순서가 매번 바뀌면 비교가 안 된다.
+      riskResults.sort((a, b) => riskIds.indexOf(a.id) - riskIds.indexOf(b.id));
+      for (const id of arbiters) {
+        // eslint-disable-next-line no-await-in-loop
+        await runRisk(id);
       }
 
       // 4.6) 포트폴리오 매니저 최종 승인 (algo 모드 전용)
@@ -1280,4 +1336,5 @@ class Engine extends EventEmitter {
   }
 }
 
-module.exports = { Engine };
+// RISK_ORDER·RISK_ARBITER_IDS 는 테스트가 분업을 강제하기 위해 내보냅니다.
+module.exports = { Engine, RISK_ORDER, RISK_ARBITER_IDS, DEBATE_ORDER, debatePlan };

@@ -743,7 +743,7 @@ python ki_monitor.py report --market KOSPI --with-agents
 
 ```bash
 cd stock-monitor  && python ki_monitor.py selftest    # 108개 (기존 64 + 통합 40)
-cd trading-floor  && npm test                          # 183개 (기존 68 + 통합 115)
+cd trading-floor  && npm test                          # 193개 (기존 68 + 통합 125)
 ```
 
 통합이 지키기로 한 것 중 **테스트가 실제로 강제하는 것**:

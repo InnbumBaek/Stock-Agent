@@ -32,6 +32,12 @@ function configPath() {
 function makeDefaults() {
   return {
     watchlist: ['SKHYNIX', 'SAMSUNG', 'BTC'],
+    // BULL⇄BEAR 토론 턴 수. 기본 4(각 2회)는 논문 구조 그대로다.
+    //
+    // 이 4턴이 한 종목 대기 시간의 절반 이상이다 — 상대 말을 받아야 반박이
+    // 되므로 순차일 수밖에 없다. 급하면 2로 줄일 수 있게 열어 두되, 기본은
+    // 바꾸지 않는다. 속도를 위해 판정의 깊이를 말없이 깎지 않는다.
+    debateTurns: 4,
     watcher: {
       enabled: false,
       intervalSec: 60,

@@ -11,7 +11,7 @@ AI 에이전트들이 시장 데이터를 분석하고 토론해 매매 판정�
 node server/server.js          # http://localhost:8000
 # 포트 충돌 시: PORT=8123 node server/server.js
 # Windows: start-floor.cmd 더블클릭
-npm test                       # 183개 단위 테스트
+npm test                       # 193개 단위 테스트
 ```
 
 의존성 설치 불필요 — `package.json`에 dependencies가 없고 Node 내장 모듈만 쓴다.
@@ -57,6 +57,35 @@ reports/          런마다 마크다운 리포트 + 같은 이름의 .json(기�
 
 셋 다 `requiresKi: true` 라 원장 실측이 없는 런(코인·해외주식)에서는 명단에서 빠진다 —
 **그쪽 비용은 통합 이전과 같다** (algo 기준 opus 13콜, 한국 종목만 16콜).
+
+### 왜 오래 걸리는가 — 16콜이지만 대기는 9번
+
+동시에 도는 것과 줄 서는 것이 다르다. 토론과 중재는 앞의 말을 받아야 성립하므로
+순차일 수밖에 없다.
+
+```
+[1]    애널리스트 6명    동시
+[2~5]  BULL⇄BEAR 4턴     순차 ← 대기 시간의 절반 이상
+[6]    ACE               순차
+[7]    성향 심사 3명      동시  (RISKY·SAFE·RED)
+[8]    NEUTRAL 중재      순차  (앞선 심사를 인용해야 한다)
+[9]    PM 승인           순차
+```
+
+**모델은 역할에 따라 나눈다.** 재료를 읽어 정리하는 일과 판정을 내리는 일은
+요구가 다르다. 전자까지 최상위로 돌리면 그 시간의 대부분이 판정 품질에
+기여하지 않는다.
+
+| 깊게 (opus) | 빠르게 (sonnet) |
+|---|---|
+| ACE · PM · RED · BULL · BEAR | 애널리스트 6명 · RISKY · SAFE · NEUTRAL · BLITZ · GUARD |
+
+`FLOOR_MODEL` 을 주면 **전원 그 모델**을 쓴다(통합 이전 동작). 개별 조정은
+`FLOOR_MODEL_DEEP` · `FLOOR_MODEL_FAST`.
+
+**속도를 더 줄이려면 토론 턴 수**뿐이다 — `config.json` 의 `debateTurns`
+(기본 4, 논문 구조 그대로). 기본값은 바꾸지 않는다. 속도를 위해 판정의 깊이를
+말없이 깎지 않는다.
 
 | 모드 | 파이프라인 | 특징 |
 |---|---|---|

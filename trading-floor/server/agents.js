@@ -932,8 +932,36 @@ const CLAUDE_CANDIDATES = [
   path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'claude.exe'), // winget
 ];
 
-// 에이전트 모델 — 환경변수 FLOOR_MODEL 로 교체 가능 (기본 opus)
-const FLOOR_MODEL = (process.env.FLOOR_MODEL || 'opus').replace(/[^a-z0-9.-]/gi, '');
+// 에이전트 모델 — 역할에 따라 나눈다.
+//
+// 16명이 전부 최상위 모델을 쓸 이유가 없다. 재료를 읽어 정리하는 일과,
+// 그 정리를 받아 **판정을 내리는 일**은 요구하는 것이 다르다. 전자까지
+// 최상위로 돌리면 한 종목에 10~20분이 걸리고, 그 시간의 대부분은 판정
+// 품질에 기여하지 않는다.
+//
+//   깊게 (기본 opus)
+//     ACE  최종 판정 — 여기서 틀리면 전부 틀린다
+//     PM   승인 — 비중과 게이트를 최종 결정한다
+//     RED  가정 반대심문 — 반례를 찾는 일이라 추론 깊이가 곧 품질이다
+//     BULL·BEAR  4턴 토론 — 상대 논리의 허점을 짚어야 한다
+//
+//   빠르게 (기본 sonnet)
+//     애널리스트 6명 — 주어진 재료를 성향대로 읽어 정리한다
+//     RISKY·SAFE·NEUTRAL — 정해진 성향으로 심사한다
+//     BLITZ·GUARD — 스캘핑 데스크
+//
+// 되돌리는 법 — FLOOR_MODEL 을 명시하면 **전원 그 모델**을 쓴다.
+// 통합 이전처럼 전부 opus 로 돌리려면 FLOOR_MODEL=opus 를 주면 된다.
+const _clean = (s) => String(s || '').replace(/[^a-z0-9.-]/gi, '');
+const FLOOR_MODEL = _clean(process.env.FLOOR_MODEL);          // 있으면 전원 고정
+const MODEL_DEEP = _clean(process.env.FLOOR_MODEL_DEEP) || 'opus';
+const MODEL_FAST = _clean(process.env.FLOOR_MODEL_FAST) || 'sonnet';
+const DEEP_IDS = new Set(['ace', 'pm', 'red', 'bull', 'bear']);
+
+function modelFor(id) {
+  if (FLOOR_MODEL) return FLOOR_MODEL;      // 명시했으면 그것만 쓴다
+  return DEEP_IDS.has(id) ? MODEL_DEEP : MODEL_FAST;
+}
 
 let claudeBin = null; // 확정된 실행 경로(따옴표 포함) 또는 'claude'
 
@@ -959,9 +987,10 @@ function resolveClaudeBin() {
   return claudeBin;
 }
 
-function spawnClaude(prompt) {
+function spawnClaude(prompt, model) {
+  const m = _clean(model) || MODEL_DEEP;
   return new Promise((resolve) => {
-    const child = spawn(`${resolveClaudeBin()} -p --model ${FLOOR_MODEL}`, { shell: true, cwd: CLAUDE_CWD });
+    const child = spawn(`${resolveClaudeBin()} -p --model ${m}`, { shell: true, cwd: CLAUDE_CWD });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -1090,9 +1119,10 @@ function diagnose({ stdout, stderr, code, timedOut }) {
 
 async function runAgentReal(id, prompt) {
   let last = { stdout: '', stderr: '', code: null, timedOut: false };
+  const model = modelFor(id);
   // 최초 시도 + 실패 시 1회 재시도 = 최대 2회
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const res = await spawnClaude(prompt);
+    const res = await spawnClaude(prompt, model);
     last = res;
     if (res.stderr && res.stderr.trim()) {
       console.error(`[agent:${id}] stderr: ${res.stderr.trim()}`);
@@ -1355,4 +1385,5 @@ async function runAgent(id, context = {}, opts = {}) {
   return runAgentReal(id, prompt);
 }
 
-module.exports = { AGENTS, extractJson, runAgent, buildPrompt, checkClaudeAvailable, resolveClaudeBin };
+module.exports = { AGENTS, extractJson, runAgent, buildPrompt, checkClaudeAvailable,
+                   resolveClaudeBin, modelFor };

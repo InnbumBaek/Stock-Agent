@@ -604,3 +604,43 @@ test('거시가 없으면 블록을 만들지 않는다', () => {
   assert.deepEqual(ki.formatKiMacroLines({ ok: false }), []);
   assert.deepEqual(ki.formatKiMacroLines({ ok: true, stats: [] }), []);
 });
+
+// ---------------------------------------------------------------------------
+// 토론 턴 수 — 속도와 깊이 사이의 유일한 손잡이
+//
+// 이 4턴이 한 종목 대기 시간의 절반 이상이다. 순차일 수밖에 없기 때문이다.
+// 열어 두되 기본은 바꾸지 않는다 — 속도를 위해 판정 깊이를 말없이 깎지 않는다.
+// ---------------------------------------------------------------------------
+
+const engine = require('../server/engine.js');
+
+test('설정이 없으면 논문 구조 그대로 4턴이다', () => {
+  assert.deepEqual(engine.debatePlan(undefined), engine.DEBATE_ORDER);
+  assert.deepEqual(engine.debatePlan(null), engine.DEBATE_ORDER);
+  assert.deepEqual(engine.debatePlan(4), ['bull', 'bear', 'bull', 'bear']);
+  assert.equal(DEFAULTS.debateTurns, 4, '기본값이 바뀌면 판정도 바뀐다');
+});
+
+test('턴 수는 짝수로 맞춘다 — 홀수면 반박 없이 끝난다', () => {
+  assert.deepEqual(engine.debatePlan(3), ['bull', 'bear']);
+  assert.deepEqual(engine.debatePlan(5), ['bull', 'bear', 'bull', 'bear']);
+});
+
+test('BULL 이 먼저, BEAR 가 받는다', () => {
+  for (const n of [2, 4, 6, 8]) {
+    const p = engine.debatePlan(n);
+    assert.equal(p.length, n);
+    assert.equal(p[0], 'bull');
+    assert.equal(p[p.length - 1], 'bear', '마지막은 반박이어야 한다');
+  }
+});
+
+test('말이 안 되는 값은 기본으로 돌린다', () => {
+  for (const bad of ['x', -1, 0, 1, NaN, {}, []]) {
+    assert.deepEqual(engine.debatePlan(bad), engine.DEBATE_ORDER, `${JSON.stringify(bad)}`);
+  }
+});
+
+test('너무 큰 값은 8턴에서 자른다', () => {
+  assert.equal(engine.debatePlan(99).length, 8);
+});
