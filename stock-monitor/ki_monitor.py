@@ -9,7 +9,8 @@ ki_monitor.py — 상장 포트폴리오사 회수 판단 리포트 자동화 (�
 
   python ki_monitor.py selftest              # 계산 검증 (키 불필요)
   python ki_monitor.py report --mock         # 가상 데이터로 리포트 1부 (키 불필요)
-  python ki_monitor.py check-auth            # 세 API 키 로딩 확인
+  python ki_monitor.py check-auth            # API 키 로딩 확인 (호출 없음)
+  python ki_monitor.py diagnose              # API 5종을 실제로 불러 진단
   python ki_monitor.py ingest --from 20240101
   python ki_monitor.py report
   python ki_monitor.py watch                 # 장중 폴링 알림 (KIS 실시간)
@@ -5500,6 +5501,186 @@ def cmd_check_auth(live: bool = False) -> int:
     return 0 if ok else 1
 
 
+# ── API 진단 ──────────────────────────────────────────────────────────
+#
+# "API 가 안 된다"는 최소 다섯 가지가 전부 다른 문제입니다. 키가 없는 것,
+# 키는 있는데 서비스별 사용신청을 안 한 것, 발급 직후라 반영이 안 된 것,
+# 방화벽, 응답 스키마가 바뀐 것 — 증상이 같아 보이므로 하나씩 실제로
+# 불러 봐야 갈립니다.
+#
+# 그래서 이 명령은 다섯 개를 **각각 최소 호출로 실제로 부릅니다.** 실패할
+# 때마다 다음에 무엇을 눌러야 하는지를 함께 적습니다. 어디가 막혔는지
+# 모른 채 헤매는 것이 이 시스템에서 가장 흔한 정지 지점입니다.
+
+_NET_HINTS = ("Max retries", "ConnectionError", "ConnectionResetError",
+              "Timeout", "timed out", "Name or service not known",
+              "Temporary failure in name resolution", "Connection aborted",
+              "SSLError", "ProxyError", "호출 실패")
+
+
+def _looks_like_network(detail: str) -> bool:
+    """키 문제인지 연결 문제인지 가릅니다. 둘은 대응이 완전히 다릅니다."""
+    return any(h in str(detail) for h in _NET_HINTS)
+
+
+def _diag_krx() -> tuple[bool, str, str]:
+    """직전 영업일 하루치를 한 번 부릅니다. 데이터가 없어도 인증은 확인됩니다."""
+    if not has_key("KRX_API_KEY"):
+        return False, "키 없음", ".env 에 KRX_API_KEY 를 넣으십시오."
+    day = (pd.Timestamp.today() - pd.tseries.offsets.BDay(1)).strftime("%Y%m%d")
+    try:
+        rows = krx_get("stk_bydd_trd", day)
+        n = len(rows) if rows is not None else 0
+        return True, f"응답 {n:,}건 ({day})", ""
+    except Exception as e:                              # noqa: BLE001
+        msg = str(e)
+        if "401" in msg or "403" in msg:
+            return False, msg[:70], (
+                "키 문제가 아닐 가능성이 큽니다. KRX 는 인증키 발급과 별개로 "
+                "**서비스별 URL 사용신청**이 필요합니다.\n"
+                "     data.krx.co.kr → 오픈API → 내 정보 → 서비스 신청에서 "
+                "'유가증권/코스닥 일별매매정보'와 지수 계열을 신청하십시오.\n"
+                "     신청 후 반영까지 시간이 걸릴 수 있습니다.")
+        return False, msg[:70], "네트워크·방화벽을 확인하십시오."
+
+
+def _diag_dart() -> tuple[bool, str, str]:
+    if not has_key("DART_API_KEY"):
+        return False, "키 없음", ".env 에 DART_API_KEY 를 넣으십시오."
+    try:
+        n = len(dart_corp_codes())
+        return True, f"상장사 {n:,}건", ""
+    except Exception as e:                              # noqa: BLE001
+        msg = str(e)
+        if "013" in msg or "020" in msg or "인증" in msg:
+            return False, msg[:70], (
+                "키가 아직 반영되지 않았거나 일일 한도(20,000건)를 넘겼습니다.\n"
+                "     opendart.fss.or.kr → 오픈API 이용현황에서 확인하십시오.")
+        return False, msg[:70], "네트워크·방화벽을 확인하십시오."
+
+
+def _diag_ecos() -> tuple[bool, str, str]:
+    if not has_key("ECOS_API_KEY"):
+        return None, "키 없음 (선택)", (
+            "거시 지표를 쓰려면 ecos.bok.or.kr/api 에서 인증키를 받아 "
+            ".env 의 ECOS_API_KEY 에 넣으십시오.")
+    try:
+        rows = ecos_key_stats(3)
+        head = rows[0]["name"] if rows else "?"
+        return True, f"{len(rows)}건 (예: {head})", ""
+    except Exception as e:                              # noqa: BLE001
+        msg = str(e)
+        if "INFO-100" in msg or "인증키" in msg:
+            return False, msg[:70], (
+                "인증키가 유효하지 않습니다. 발급 직후라면 하루 정도 걸릴 수 "
+                "있습니다.\n     ecos.bok.or.kr/api → 인증키 신청에서 상태를 "
+                "확인하십시오.")
+        if "INFO-200" in msg:
+            return False, msg[:70], "요청한 통계가 없습니다. --limit 를 줄여 보십시오."
+        return False, msg[:70], "네트워크·방화벽을 확인하십시오."
+
+
+def _diag_kis() -> tuple[bool, str, str]:
+    if not (has_key("KIS_APP_KEY") and has_key("KIS_APP_SECRET")):
+        return None, "키 없음 (선택)", (
+            "실시간 시세를 쓰려면 KIS_APP_KEY·KIS_APP_SECRET 을 넣으십시오. "
+            "없으면 원장의 일별 종가로 돕니다.")
+    p = quote_payload("005930", with_orderbook=False)   # 삼성전자로 확인합니다
+    if p["ok"]:
+        q = p["quote"]
+        return True, f"삼성전자 {q['price']:,.0f}원", ""
+    msg = str(p.get("reason", ""))
+    if "EGW00133" in msg:
+        return False, msg[:70], (
+            "접근토큰 재발급 제한입니다. .kis_token.json 이 만들어졌는지 보고, "
+            "잠시 뒤 다시 하십시오.")
+    if "EGW00121" in msg or "appkey" in msg.lower():
+        return False, msg[:70], (
+            "앱키·시크릿이 맞지 않습니다. 모의투자용 키를 실전 서버에 쓰면 "
+            "이 오류가 납니다 — apiportal.koreainvestment.com 에서 확인하십시오.")
+    if "검산 실패" in msg:
+        return False, msg[:70], (
+            "연결은 됐으나 응답 필드가 예상과 다릅니다. 이 값은 내보내지 "
+            "않습니다 — 틀린 현재가는 없는 것보다 나쁩니다. 이 메시지를 그대로 "
+            "알려 주시면 매핑을 고칠 수 있습니다.")
+    return False, msg[:70], "네트워크·방화벽을 확인하십시오."
+
+
+def _diag_fred() -> tuple[bool, str, str]:
+    if not has_key("FRED_API_KEY"):
+        return None, "키 없음 (선택)", "해외 매크로를 쓰지 않으면 없어도 됩니다."
+    try:
+        s = fred_fetch("DGS10", (date.today() - pd.Timedelta(days=30)).strftime("%Y-%m-%d"))
+        return True, f"미 국채 10년 {len(s)}일치", ""
+    except Exception as e:                              # noqa: BLE001
+        return False, str(e)[:70], "fredaccount.stlouisfed.org/apikeys 에서 키를 확인하십시오."
+
+
+def cmd_diagnose() -> int:
+    """API 다섯 개를 각각 실제로 불러 봅니다. 어디가 왜 막혔는지 갈라 줍니다."""
+    print("API 진단 — 각 API 를 실제로 한 번씩 부릅니다")
+    px = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if px:
+        # 비밀번호가 든 프록시 주소가 화면에 찍히면 그것도 유출입니다.
+        shown = re.sub(r"//[^@/]+@", "//***@", px)
+        print(f"프록시       : {shown}")
+    ca = os.environ.get("REQUESTS_CA_BUNDLE")
+    if ca:
+        print(f"사내 인증서  : {ca}")
+    print("=" * 62)
+    checks = (("KRX  (필수)", _diag_krx), ("DART (필수)", _diag_dart),
+              ("ECOS (선택)", _diag_ecos), ("KIS  (선택)", _diag_kis),
+              ("FRED (선택)", _diag_fred))
+    required_bad = 0
+    notes = []
+    net_fail = 0
+    tried = 0
+    for label, fn in checks:
+        try:
+            state, detail, hint = fn()
+        except Exception as e:                          # noqa: BLE001
+            state, detail, hint = False, f"{type(e).__name__}: {e}"[:70], ""
+        mark = {True: "O", False: "X", None: "-"}[state]
+        print(f"  {mark}  {label:<12} {detail}")
+        if state is not None:
+            tried += 1
+            if state is False and _looks_like_network(detail):
+                net_fail += 1
+        if hint:
+            notes.append((label, hint))
+        if state is False and "필수" in label:
+            required_bad += 1
+    print("=" * 62)
+
+    # 전부 네트워크 오류면 문제는 다섯 개가 아니라 하나입니다. 다섯 곳을
+    # 각각 들여다보게 두면 없는 문제를 찾느라 시간을 버립니다.
+    if tried >= 2 and net_fail == tried:
+        print("\n다섯 곳이 아니라 한 곳의 문제입니다 — 나가는 연결이 전부 막혀 있습니다.")
+        print("  · 사내망이라면 프록시·방화벽 허용 목록에 아래를 넣어야 합니다:")
+        print("      data-dbg.krx.co.kr · opendart.fss.or.kr")
+        print("      ecos.bok.or.kr · openapi.koreainvestment.com")
+        print("  · VPN 을 쓰신다면 끄고 다시 해 보십시오.")
+        print("  · 그래도 안 되면 키 문제가 아니므로 전산 담당자에게 위 주소를 주십시오.")
+        if not (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")):
+            print("  · 회사에 프록시가 있다면 아직 알려 주지 않으셨습니다:")
+            print("      set HTTPS_PROXY=http://프록시주소:포트")
+        print("\n  전산팀에 그대로 넘길 수 있는 요청서가 있습니다 — NETWORK.md")
+        print("  다른 망에서 원장을 만들어 옮기는 방법도 그 문서에 있습니다.")
+        return 1
+
+    if notes:
+        print("\n다음에 할 것")
+        for label, hint in notes:
+            print(f"\n  [{label.strip()}]")
+            for line in hint.split("\n"):
+                print(f"     {line}" if not line.startswith("     ") else line)
+    if required_bad:
+        print(f"\n필수 API {required_bad}개가 막혀 있습니다. 원장을 만들 수 없습니다.")
+        return 1
+    print("\n필수 API 는 전부 정상입니다.")
+    return 0
+
+
 def cmd_catalog() -> int:
     r = catalog_audit()
     print(f"수집 항목 {r['total']} / 표시 {r['shown']} / "
@@ -6765,6 +6946,7 @@ def build_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("check-auth", help="세 API 키 로딩 확인")
     a.add_argument("--live", action="store_true", help="실제 호출까지 시도")
     sub.add_parser("doctor", help="환경 점검 — 새 컴퓨터에서 먼저 실행")
+    sub.add_parser("diagnose", help="API 5종을 실제로 불러 어디가 막혔는지 진단")
     sub.add_parser("catalog", help="수집 항목 대장 감사")
     g = sub.add_parser("ingest", help="KRX 일별 적재")
     g.add_argument("--from", dest="frm")
@@ -6956,6 +7138,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_quote(args.q_codes, not args.no_orderbook, args.indent)
     elif args.cmd == "macro":
         return cmd_macro(args.limit, args.indent)
+    elif args.cmd == "diagnose":
+        return cmd_diagnose()
     return 0
 
 

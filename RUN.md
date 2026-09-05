@@ -85,8 +85,17 @@ FRED_API_KEY=...     # 선택 (해외 매크로)
 ### 준비가 됐는지 한 번에 보기
 
 ```bash
-python ki_monitor.py doctor
+python ki_monitor.py doctor      # 패키지·키·원장·CSV 가 있는가
+python ki_monitor.py diagnose    # API 5종을 실제로 불러 어디가 막혔는가
 ```
+
+`doctor` 는 **있는지**를 보고, `diagnose` 는 **되는지**를 봅니다. 키가 다 있는데
+안 될 때는 `diagnose` 가 답을 줍니다 — 키 문제인지, 서비스 신청 누락인지,
+방화벽인지를 갈라 줍니다.
+
+> 사내망에서 **"나가는 연결이 전부 막혀 있습니다"** 가 나오면 키 문제가
+> 아닙니다. [`NETWORK.md`](NETWORK.md) 에 전산팀에 그대로 넘길 수 있는 허용
+> 요청서와, 다른 망에서 원장을 만들어 옮기는 방법이 있습니다.
 
 패키지·키·원장·CSV 를 전부 검사해 `O` / `X` 로 보여 주고, 마지막 줄에 다음 할 일을
 알려 줍니다. **`X` 를 전부 `O` 로 만드는 것이 준비 과정의 전부입니다.**
@@ -307,6 +316,7 @@ python ki_monitor.py facts --code 000660 --with-disclosures --indent 2
 | `ModuleNotFoundError` · `selftest` 실패 | 패키지 누락. `pip install pandas numpy scipy requests lxml` |
 | `python` 을 못 찾음 (윈도우) | `py ki_monitor.py ...` 로 바꿔 보십시오 |
 | `ingest` 가 401 | KRX 는 키 발급과 별개로 **서비스별 URL 사용신청**이 필요합니다 |
+| API 가 전부 안 됨 | `python ki_monitor.py diagnose` → 사내망 차단이면 `NETWORK.md` |
 | `claude` 를 못 찾음 | 실전 런에만 필요합니다. 설치 전에는 `--demo` 로 배선만 확인하십시오 |
 | 에이전트 절이 "분석이 없습니다" | `export-brief.js` 를 먼저 돌리십시오. 경로는 `--brief` 로 지정 가능 |
 | `Yahoo chart HTTP 403` 인데 계속 진행됨 | 정상입니다. 원장의 KRX 공식 일봉으로 대체된 것이고 시세 줄에 그 사실이 표시됩니다 |

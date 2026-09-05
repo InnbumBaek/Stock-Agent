@@ -139,11 +139,25 @@ if env.exists():
 else:
     warn(".env 가 없어 키 유출 검사를 건너뛴다")
 
-NAMES = ["이노스페이스", "엔알비", "뉴로핏", "압타바이오", "뉴엔AI", "더핑크퐁",
-         "루미르", "꿈비", "시지트로닉스", "카나프", "폴레드", "코오롱인베"]
+# 검사할 이름을 여기 적지 않는다. 적는 순간 이 파일이 유출이 된다
+# (감사기가 자기 자신을 잡는다). watchlist.csv 에서 읽는다 — 그 파일은
+# .gitignore 대상이고, 없으면 이 검사를 건너뛴다.
+NAMES = []
+_wl = ROOT / "stock-monitor" / "watchlist.csv"
+if _wl.exists():
+    for _line in io.open(_wl, encoding="utf-8-sig"):
+        _line = _line.strip()
+        if not _line or _line.startswith("#") or _line.startswith("code,"):
+            continue
+        _parts = _line.split(",")
+        if len(_parts) >= 2 and _parts[1].strip():
+            NAMES.append(_parts[1].strip())
+if not NAMES:
+    warn("watchlist.csv 가 없어 실명 유출 검사를 건너뛴다")
 # -z 로 받는다. 한글 경로를 git 이 8진수로 이스케이프해 git show 가 못 찾는다.
-r = subprocess.run(["git", "grep", "-l", "-z", "-F", "-f", "/dev/stdin"],
-                   input="\n".join(NAMES), capture_output=True, text=True, cwd=ROOT)
+r = (subprocess.run(["git", "grep", "-l", "-z", "-F", "-f", "/dev/stdin"],
+                    input="\n".join(NAMES), capture_output=True, text=True, cwd=ROOT)
+     if NAMES else subprocess.CompletedProcess([], 0, "", ""))
 hit = [h for h in r.stdout.split("\0") if h.strip()]
 # 원본 커밋에 이미 있던 파일은 제외한다 — 통합 작업이 새로 넣은 것만 본다.
 # (원본을 지우는 것은 그 자체가 회귀다. CLAUDE.md 3항)
