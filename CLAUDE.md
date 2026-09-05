@@ -93,8 +93,8 @@ diff 에 잡혀 실제 변경이 묻힌다. 편집 후 `file <파일>` 로 확�
 두 쪽 다 통과해야 통합이 성립한다.
 
 ```bash
-cd stock-monitor && python ki_monitor.py selftest   # 95개 (키·네트워크 불필요)
-cd trading-floor && npm test                         # 148개
+cd stock-monitor && python ki_monitor.py selftest   # 104개 (키·네트워크 불필요)
+cd trading-floor && npm test                         # 164개
 ```
 
 통합 계층을 건드렸다면 **회귀 확인**까지 해라 — 에이전트 절을 끈 리포트가 통합 이전

@@ -3449,6 +3449,8 @@ def render_quant(ctx: dict, refresh_sec: int = 0) -> Path:
             ("s3", "어떻게 팔 것인가"), ("s4", "지금이 그 때인가")]
     if agents_on:
         secs.append(("sa", "에이전트 분석"))
+    if agents_on and (ctx.get("agents") or {}).get("scorecard"):
+        secs.append(("ss", "판정 성적표"))
     secs += [("s5", "종목별 상세"), ("s6", "밸류에이션"),
              ("s7", "시장 배경"), ("s8", "출처")]
     _links = [f'<a href="#{sid}">{i} {title}</a>'
@@ -3467,6 +3469,13 @@ def render_quant(ctx: dict, refresh_sec: int = 0) -> Path:
             "보고 토론해 내린 판정입니다. 측정값이 아니라 의견이므로 절을 나눠 실었습니다. "
             "회의에서 논점을 정리하는 데 쓰고, 근거는 §1~§4 로 돌아가 확인하십시오.</div>"
             + render_agents_block(ctx.get("agents"), wl_codes) + "\n\n")
+
+        # 성적표 — 판정을 읽은 직후에 그 판정을 얼마나 믿을지 알아야 합니다.
+        # 절을 떨어뜨려 놓으면 회의에서 아무도 뒤까지 넘기지 않습니다.
+        sc_body = render_scorecard_block(ctx.get("agents"))
+        if sc_body:
+            agent_block += ('<h2 id="ss">판정 성적표 — 지난 판정은 맞았는가</h2>'
+                            + sc_body + "\n\n")
         agent_flow = " → <b>에이전트 판정</b>"
 
     html = QUANT_TEMPLATE.format(
@@ -4713,6 +4722,57 @@ def selftest() -> int:
     check("quote 는 키가 없으면 예외 대신 ok:false", lambda: _assert(
         quote_payload("000660")["ok"] is False
         if not (has_key("KIS_APP_KEY") and has_key("KIS_APP_SECRET")) else True))
+    # --- 판정 성적표 ---------------------------------------------------
+    _SC = {"scorecard": {
+        "ok": True, "schema": "agent.scorecard/1", "total": 40,
+        "overall": {"evaluated": 31, "pending": 5, "flat": 4,
+                    "hitRate": 61.3, "avgReturnPct": 3.2},
+        "calibration": [{"bucket": "70-79", "n": 12, "predicted": 74.0,
+                         "actual": 58.3, "gap": 15.7}],
+        "levels": {"n": 9, "target_hit": 4, "stop_hit": 2, "still_open": 3,
+                   "ambiguous": 0, "target_rate": 66.7,
+                   "median_days_to_target": 18,
+                   "rows": [{"ts": "2026-08-01T00:00:00Z", "code": "462350",
+                             "name": "<script>x</script>", "action": "SELL",
+                             "target": 120000, "stop": 90000,
+                             "outcome": "target", "days": 12}]},
+        "limits": ["개별 에이전트 적중률은 아직 낼 수 없다"],
+        "note": "표본 31건",
+    }}
+    check("성적표가 없으면 절을 만들지 않는다", lambda: _assert(
+        render_scorecard_block(None) == "" and render_scorecard_block({}) == ""))
+    check("성적표 ok:false 면 절을 만들지 않는다", lambda: _assert(
+        render_scorecard_block({"scorecard": {"ok": False}}) == ""))
+    check("성적표가 확신도 대 실제를 싣는다", lambda: _assert(
+        "58.3%" in render_scorecard_block(_SC)
+        and "+15.7p" in render_scorecard_block(_SC)))
+    check("성적표가 목표가 도달을 싣는다", lambda: _assert(
+        "66.7%" in render_scorecard_block(_SC)
+        and "18영업일" in render_scorecard_block(_SC)))
+    check("성적표가 못 잰 것을 적는다", lambda: _assert(
+        "재지 못한 것" in render_scorecard_block(_SC)))
+    check("성적표도 HTML 을 이스케이프한다", lambda: _assert(
+        "<script>" not in render_scorecard_block(_SC)
+        and "&lt;script&gt;" in render_scorecard_block(_SC)))
+    check("표본이 적으면 경고를 붙인다", lambda: _assert(
+        "경향으로" in render_scorecard_block(
+            {"scorecard": {**_SC["scorecard"],
+                           "overall": {"evaluated": 3, "pending": 0, "flat": 0,
+                                       "hitRate": 66.7, "avgReturnPct": 1.0}}})))
+    check("채점된 것이 없으면 그렇다고 적는다", lambda: _assert(
+        "몇 주는 지나야" in render_scorecard_block(
+            {"scorecard": {**_SC["scorecard"],
+                           "overall": {"evaluated": 0, "pending": 9, "flat": 0,
+                                       "hitRate": None, "avgReturnPct": None}}})))
+    check("없는 값은 0 이 아니라 — 로 낸다", lambda: _assert(
+        "—" in render_scorecard_block(
+            {"scorecard": {**_SC["scorecard"],
+                           "overall": {"evaluated": 31, "pending": 0, "flat": 0,
+                                       "hitRate": None, "avgReturnPct": None}}})
+        and "0.0%" not in render_scorecard_block(
+            {"scorecard": {**_SC["scorecard"],
+                           "overall": {"evaluated": 31, "pending": 0, "flat": 0,
+                                       "hitRate": None, "avgReturnPct": None}}})))
     check("카탈로그 단위 미확정 0", lambda: _assert(not catalog_audit()["problems"]))
     # 종가 알림
     check("등락률은 수정주가, 목표단가는 원주가", lambda: _assert(
@@ -6378,6 +6438,146 @@ def _agent_one(rec: dict) -> str:
            if rec.get("memory") else "")
         + f"<div class='note' style='margin-top:6px'>{' · '.join(meta)}</div>"
         + "</div>")
+
+
+def _sc_pct(v) -> str:
+    """퍼센트 한 칸. 없으면 '—' 입니다. 0 으로 채우지 않습니다."""
+    try:
+        return f"{float(v):.1f}%"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _sc_num(v) -> str:
+    try:
+        return f"{float(v):,.0f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def render_scorecard_block(brief: dict | None) -> str:
+    """§ 판정 성적표 — 지난 판정이 맞았는가.
+
+    이 절이 없으면 회의에서 16명의 말이 전부 같은 무게로 읽힙니다. 그래서
+    판정 절 바로 뒤에 둡니다.
+
+    지키는 것
+
+      1. **못 잰 것을 못 잰다고 적습니다.** 개별 에이전트 적중률은 아직
+         낼 수 없습니다. 그 사실을 숨기면 여기 숫자 전체를 믿을 수 없게 됩니다.
+      2. **표본 수를 항상 함께 냅니다.** 3건으로 낸 60% 와 300건으로 낸 60%
+         는 다른 숫자입니다.
+      3. **에이전트가 쓴 문자열은 여기 오지 않습니다.** 전부 계산값입니다.
+         그래도 받는 값이 JSON 이므로 _esc() 를 거칩니다.
+    """
+    sc = (brief or {}).get("scorecard")
+    if not sc or not sc.get("ok"):
+        return ""
+
+    ov = sc.get("overall") or {}
+    lv = sc.get("levels") or {}
+    n_eval = ov.get("evaluated") or 0
+
+    head = (
+        "<div class='conf' style='background:#4A3A6E'>"
+        "이 절은 <b>지난 판정의 사후 채점</b>입니다 — 예측이 아니라 결과입니다."
+        "<br><span>한국거래소 공식 일봉으로 채점했습니다. 판정 이후의 시세가 없는 건은 "
+        "'평가 대기'이고 승률에서 빠집니다. 표본이 적으면 숫자를 경향으로 읽지 마십시오."
+        "</span></div>")
+
+    # 한 줄 요약
+    rows = [
+        ("누적 판정", f"{_sc_num(sc.get('total'))}건"),
+        ("채점된 건", f"{_sc_num(n_eval)}건"),
+        ("평가 대기", f"{_sc_num(ov.get('pending'))}건"),
+        ("관망(방향 없음)", f"{_sc_num(ov.get('flat'))}건"),
+        ("방향 적중률", _sc_pct(ov.get("hitRate"))),
+        ("평균 수익률", _sc_pct(ov.get("avgReturnPct"))),
+    ]
+    summary = ("<table><tr>"
+               + "".join(f"<th>{_esc(k)}</th>" for k, _ in rows)
+               + "</tr><tr>"
+               + "".join(f"<td>{_esc(v)}</td>" for _, v in rows)
+               + "</tr></table>")
+
+    # 확신도 캘리브레이션 — 자신 있다고 한 만큼 맞혔는가
+    cal = [c for c in (sc.get("calibration") or []) if (c.get("n") or 0) > 0]
+    cal_html = ""
+    if cal:
+        body = "".join(
+            "<tr><td>{b}</td><td>{n}</td><td>{p}</td><td>{a}</td><td>{g}</td></tr>".format(
+                b=_esc(c.get("bucket", "")), n=_sc_num(c.get("n")),
+                p=_sc_pct(c.get("predicted")), a=_sc_pct(c.get("actual")),
+                g=("—" if c.get("gap") is None else f"{float(c['gap']):+.1f}p"))
+            for c in cal)
+        cal_html = (
+            "<h3>확신도 대 실제</h3>"
+            "<div class='lead'>데스크가 '확신도 80%'라고 했을 때 실제로 80% 를 맞혔는지 "
+            "봅니다. 차이가 양수면 과신입니다.</div>"
+            "<table><tr><th>확신도 구간</th><th>표본</th><th>스스로 말한 확률</th>"
+            "<th>실제 적중률</th><th>차이</th></tr>" + body + "</table>")
+
+    # 목표가·손절가 도달 — 회수 판단에 가장 직접적인 채점
+    lvl_html = ""
+    if (lv.get("n") or 0) > 0:
+        lvl_rows = [
+            ("목표가 도달", _sc_num(lv.get("target_hit"))),
+            ("손절가 도달", _sc_num(lv.get("stop_hit"))),
+            ("아직 진행 중", _sc_num(lv.get("still_open"))),
+            ("판정 불가(같은 날 양쪽)", _sc_num(lv.get("ambiguous"))),
+            ("목표가 도달률", _sc_pct(lv.get("target_rate"))),
+            ("도달까지 중앙값", ("—" if lv.get("median_days_to_target") is None
+                            else f"{_sc_num(lv.get('median_days_to_target'))}영업일")),
+        ]
+        lvl_html = (
+            "<h3>제시한 가격에 실제로 닿았는가</h3>"
+            "<div class='lead'>데스크가 낸 목표가·손절가 중 어느 쪽에 먼저 닿았는지 "
+            "일봉으로 봅니다. 방향 적중률보다 회수 판단에 더 직접적입니다 — "
+            "'그 가격에 팔 수 있었나'이기 때문입니다.</div>"
+            "<table><tr>"
+            + "".join(f"<th>{_esc(k)}</th>" for k, _ in lvl_rows) + "</tr><tr>"
+            + "".join(f"<td>{_esc(v)}</td>" for _, v in lvl_rows) + "</tr></table>")
+
+        detail = lv.get("rows") or []
+        if detail:
+            OUTCOME = {"target": "목표가 도달", "stop": "손절가 도달",
+                       "open": "진행 중", "ambiguous": "판정 불가",
+                       "pending": "평가 대기", "flat": "관망", "no_levels": "레벨 없음"}
+            body = "".join(
+                "<tr><td>{t}</td><td>{n}</td><td>{a}</td><td>{tg}</td>"
+                "<td>{st}</td><td>{o}</td><td>{d}</td></tr>".format(
+                    t=_esc(str(r.get("ts", ""))[:10]),
+                    n=_esc(r.get("name") or r.get("code") or "—"),
+                    a=_esc(r.get("action") or "—"),
+                    tg=_sc_num(r.get("target")), st=_sc_num(r.get("stop")),
+                    o=_esc(OUTCOME.get(r.get("outcome"), r.get("outcome") or "—")),
+                    d=("—" if r.get("days") is None else f"{_sc_num(r.get('days'))}일"))
+                for r in detail)
+            lvl_html += (
+                "<details><summary>건별 내역 (최근 " + str(len(detail)) + "건)</summary>"
+                "<table><tr><th>판정일</th><th>종목</th><th>판정</th><th>목표가</th>"
+                "<th>손절가</th><th>결과</th><th>소요</th></tr>" + body + "</table></details>")
+
+    # 못 재는 것 — 이 절이 성적표에서 가장 중요합니다
+    limits = sc.get("limits") or []
+    lim_html = ""
+    if limits:
+        lim_html = ("<h3>이 성적표가 재지 못한 것</h3>"
+                    "<ul class='c' style='margin:6px 0;padding-left:16px'>"
+                    + "".join(f"<li>{_esc(x)}</li>" for x in limits) + "</ul>")
+
+    warn = ""
+    if n_eval == 0:
+        warn = ("<div class='flag'>아직 채점된 판정이 없습니다. 판정 이후의 일봉이 "
+                "쌓여야 성적이 나옵니다 — 몇 주는 지나야 읽을 만해집니다.</div>")
+    elif n_eval < 30:
+        warn = (f"<div class='flag'>표본이 {n_eval}건뿐입니다. 숫자를 경향으로 "
+                "읽지 마십시오 — 우연이 성적처럼 보이는 구간입니다.</div>")
+
+    note = sc.get("note")
+    note_html = f"<div class='c' style='margin-top:8px'>{_esc(note)}</div>" if note else ""
+
+    return (head + warn + summary + cal_html + lvl_html + lim_html + note_html)
 
 
 def render_agents_block(brief: dict | None, codes: list[str] | None = None) -> str:

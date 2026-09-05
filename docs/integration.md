@@ -451,6 +451,48 @@ JSON 을 한 벌 더 쓸 뿐이고, 여기서 새로 계산하거나 요약하�
 
 없는 값은 `null` 이다. 확신도 없음이 `0` 으로 둔갑하면 성적표 집계까지 틀어진다.
 
+### 5.1-b 판정 성적표 — `server/scorecard.js` → `agent.scorecard/1`
+
+이 데스크는 매주 의견을 만든다. 그런데 그 의견이 맞았는지 아무도 채점하지 않으면
+회의에서 16명의 말이 전부 같은 무게로 읽힌다. **이것이 통합 이후 가장 큰 구멍이었다.**
+
+부품은 이미 있었다. `stats.js` 가 확신도 캘리브레이션을 계산하고, `decisions.json` 에
+판정이 쌓이고, 사이드카에 목표가·손절가가 남는다. 셋이 서로 연결돼 있지 않았을 뿐이다.
+
+```jsonc
+{
+  "ok": true, "schema": "agent.scorecard/1",
+  "total": 40,
+  "overall": { "evaluated": 31, "pending": 5, "flat": 4,
+               "hitRate": 61.3, "avgReturnPct": 3.2 },
+  "calibration": [                       // 스스로 말한 확률 vs 실제
+    { "bucket": "80-89", "n": 11, "predicted": 83.0, "actual": 63.6, "gap": 19.4 }
+  ],
+  "levels": {                            // 제시한 가격에 실제로 닿았는가
+    "n": 9, "target_hit": 4, "stop_hit": 2, "still_open": 3, "ambiguous": 0,
+    "target_rate": 66.7, "median_days_to_target": 18,
+    "rows": [ { "ts": "...", "code": "462350", "action": "SELL",
+                "target": 120000, "stop": 90000, "outcome": "target", "days": 12 } ]
+  },
+  "limits": [ "개별 에이전트의 적중률은 아직 낼 수 없다 …" ],
+  "note": "표본 31건 — 참고용(표본 편향 가능)"
+}
+```
+
+| 규칙 | 왜 |
+|---|---|
+| **원장으로 채점한다** (`makeLedgerPriceLookup`) | `stats.js` 의 기본 경로는 야후다. 포트폴리오사는 그쪽에 없고 사내망에서는 야후 자체가 막힌다. 이미 받아 둔 KRX 공식 일봉을 쓴다 |
+| **같은 날 목표·손절에 모두 닿으면 어느 쪽으로도 세지 않는다** (`ambiguous`) | 일봉으로는 순서를 알 수 없다. 유리한 쪽으로 세면 성적이 조용히 부풀려진다 |
+| **판정 이후 시세가 없으면 `pending`** | 추측하지 않는다. 승률 계산에서 빠진다 |
+| **개별 에이전트 적중률은 내지 않는다** | 애널리스트는 자유 문장을 내고 방향 라벨이 없다. 텍스트에서 방향을 추정하면 **없는 성적을 지어내는 것**이다. `limits` 에 그 사실을 적는다 |
+| **표본 수를 항상 함께 낸다** | 3건으로 낸 60% 와 300건으로 낸 60% 는 다른 숫자다. 30건 미만은 리포트에 경고를 붙인다 |
+| 성적표를 못 만들어도 브리핑은 나간다 (`scorecard: null`) | 성적표 없는 회의 자료가, 회의 자료가 아예 없는 것보다 낫다 |
+
+리포트에서는 **에이전트 절 바로 뒤**에 붙는다(`#ss`). 판정을 읽은 직후에 그 판정을
+얼마나 믿을지 알아야 하기 때문이다 — 절을 떨어뜨려 놓으면 아무도 뒤까지 넘기지 않는다.
+
+`--no-scorecard` 로 끌 수 있다. 껐을 때의 브리핑은 성적표 도입 이전과 같다.
+
 ### 5.2 브리핑 — `server/export-brief.js` → `agent.brief/1`
 
 ```bash
@@ -577,8 +619,8 @@ python ki_monitor.py report --market KOSPI --with-agents
 ## 8. 검증
 
 ```bash
-cd stock-monitor  && python ki_monitor.py selftest    # 95개 (기존 64 + 통합 31)
-cd trading-floor  && npm test                          # 148개 (기존 68 + 통합 80)
+cd stock-monitor  && python ki_monitor.py selftest    # 104개 (기존 64 + 통합 40)
+cd trading-floor  && npm test                          # 164개 (기존 68 + 통합 96)
 ```
 
 통합이 지키기로 한 것 중 **테스트가 실제로 강제하는 것**:

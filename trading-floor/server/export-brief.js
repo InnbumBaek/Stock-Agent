@@ -55,6 +55,7 @@ function parseArgs(argv) {
     else if (a === '--mode') out.mode = next();
     else if (a === '--demo') out.demo = true;
     else if (a === '--max-age-hours') out.maxAgeHours = Number(next());
+    else if (a === '--no-scorecard') out.noScorecard = true;
     else if (a === '--quiet') out.quiet = true;
     else if (a === '-h' || a === '--help') out.help = true;
     else return { error: `알 수 없는 인자: ${a}` };
@@ -87,6 +88,7 @@ const USAGE = `
   --demo                 --run 과 함께 — claude 없이 목업으로 돌립니다 (연결 시험용)
   --out <경로>           출력 파일 (기본 reports/agent-brief.json)
   --max-age-hours N      기존 리포트를 모을 때 N시간보다 오래된 건 제외
+  --no-scorecard         판정 성적표를 빼고 만듭니다 (원장 조회를 아낍니다)
   --quiet                진행 상황 출력 안 함
 
 예)
@@ -197,7 +199,7 @@ async function runOne(engine, symbol, { mode, demo, quiet }) {
 
 // --- 브리핑 조립 --------------------------------------------------------
 
-function buildBrief(runs, { mode, ran, errors }) {
+function buildBrief(runs, { mode, ran, errors, scorecard }) {
   const byKey = {};
   const byCode = [];
   const others = [];
@@ -222,6 +224,12 @@ function buildBrief(runs, { mode, ran, errors }) {
     by_code: byCode.sort(),
     others: others.sort(),
     errors: errors.slice(),
+    // 판정 성적표 (agent.scorecard/1). 만들지 못했으면 null 이다.
+    //
+    // 이 절이 없으면 회의에서 16명의 말이 전부 같은 무게로 읽힌다. 다만
+    // 성적표를 못 만들었다고 브리핑 전체가 서면 안 되므로 null 을 허용한다 —
+    // 받는 쪽(리포트)은 없으면 그 절을 생략한다.
+    scorecard: scorecard && scorecard.ok ? scorecard : null,
   };
 }
 
@@ -280,7 +288,34 @@ async function main(argv) {
     }
   }
 
-  const brief = buildBrief(runs, { mode: args.mode, ran: args.run, errors });
+  // 성적표 — 지난 판정이 맞았는지 원장으로 채점한다.
+  //
+  // 실패해도 브리핑을 세우지 않는다. 성적표가 없는 회의 자료가, 회의 자료가
+  // 아예 없는 것보다는 낫다.
+  let scorecard = null;
+  if (!args.noScorecard) {
+    try {
+      // eslint-disable-next-line global-require
+      const { buildScorecard } = require('./scorecard');
+      scorecard = await buildScorecard({});
+      if (scorecard && scorecard.ok) {
+        const ov = scorecard.overall || {};
+        say('');
+        say(`성적표: 판정 ${scorecard.total}건 · 채점 ${ov.evaluated || 0}건` +
+            (ov.hitRate != null ? ` · 적중 ${ov.hitRate}%` : '') +
+            (scorecard.levels && scorecard.levels.target_hit != null
+              ? ` · 목표가 도달 ${scorecard.levels.target_hit}건`
+              : ''));
+      } else if (scorecard) {
+        say(`성적표를 만들지 못했습니다 — ${scorecard.reason || '알 수 없는 이유'}`);
+      }
+    } catch (e) {
+      say(`성적표를 만들지 못했습니다 — ${e && e.message ? e.message : e}`);
+      scorecard = null;
+    }
+  }
+
+  const brief = buildBrief(runs, { mode: args.mode, ran: args.run, errors, scorecard });
   const outPath = path.resolve(args.out);
   await fsp.mkdir(path.dirname(outPath), { recursive: true });
   await fsp.writeFile(outPath, JSON.stringify(brief, null, 2) + '\n', 'utf8');
