@@ -781,6 +781,34 @@ python ki_monitor.py report --market KOSPI --with-agents
   수확 결과는 `.papers_candidates.json`(gitignore)에 `adopted:false` 로 쌓이고
   **인용되지 않는다.** `papers()` 가 걸러내고 `selftest` 가 검사한다.
 
+### 7-c. 문헌 심사와 구현 — `node server/paper-scan.js`
+
+```bash
+python docs/fetch_papers.py --harvest 2013-2026     # ① 연도별로 훑어 후보에 쌓기
+node server/paper-scan.js --years 2013-2026         # ② 무엇을 심사할지만 보기
+node server/paper-scan.js --years 2024-2026 --run   # ③ 실제 심사 (연도당 호출 1회)
+```
+
+퀀트 데스크가 연도별 후보를 읽고 **네 질문 중 하나를 바꾸는가**로 판정한다.
+채택제안한 논문에 대해서는 ```` ```factor:<키> ```` 블록으로 **실제 파이썬 코드**를
+쓰고, `paper-scan.js` 가 그것을 `stock-monitor/factors_proposed/<키>.py` 에 놓는다.
+
+**여기서 통과 여부를 정하지 않는다.** 파이썬의 네 관문이 정한다.
+
+| 관문 | 막는 것 |
+|---|---|
+| 정적 | `import`·`eval`·`exec`·`open`·던더 접근·바깥에서 끌어오는 이름 (AST 검사) |
+| 계약 | `compute(df, mkt, list_date, win)` · `(값, 관측수, 사유)` 3-튜플 |
+| 연기 | 합성 원장에서 예외·무한대·NaN 없이 도는가 |
+| **검산** | **META `check.expect` 와 실제 계산이 맞는가** |
+| 인용 | `paper` 가 `.papers.json` 채택본에 실재하는가 |
+
+통과해도 채택본과 섞이지 않는다 — `ki.factors/1` 의 `proposed` 목록으로 따로
+나가고 값마다 `"status": "제안 — 검산 통과 · 사람이 채택하기 전"` 이 붙는다.
+
+`paper-scan.js` 는 `.papers.json` 도 팩터 코드도 고치지 않는다. 제안서는
+`docs/proposals/`(gitignore)에 쓴다.
+
 받는 쪽은 `ki-bridge.js` 의 `fetchKiFactors()` → `formatKiFactorLines()` 이고,
 **퀀트 데스크(QUANT) 한 명에게만** 간다. QUANT 는 그것을 읽고 *다른 에이전트에게
 어떻게 볼지 제안*하며, 그 제안은 DIANA·FLOW·RED·ACE·PM 다섯 자리에 "판정 아님"
@@ -791,8 +819,8 @@ python ki_monitor.py report --market KOSPI --with-agents
 ## 8. 검증
 
 ```bash
-cd stock-monitor  && python ki_monitor.py selftest    # 127개 (기존 64 + 통합 53)
-cd trading-floor  && npm test                          # 200개 (기존 68 + 통합 125)
+cd stock-monitor  && python ki_monitor.py selftest    # 139개 (기존 64 + 통합 53)
+cd trading-floor  && npm test                          # 210개 (기존 68 + 통합 125)
 ```
 
 통합이 지키기로 한 것 중 **테스트가 실제로 강제하는 것**:

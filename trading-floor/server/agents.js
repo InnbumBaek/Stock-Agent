@@ -509,7 +509,116 @@ function header(meta) {
 // buildPrompt(id, context) — 역할별 데이터 주입
 // context: { market, analystReports?, debateLog? }
 // ---------------------------------------------------------------------------
+// 원장이 실제로 가진 열. 여기 없는 데이터를 요구하는 팩터는 구현할 수 없다.
+// 이 목록을 프롬프트에 박아 두지 않으면, 에이전트는 "일중 체결 자료로…" 같은
+// 구현 불가능한 제안을 내고 그것을 읽는 사람이 뒤늦게 알게 된다.
+const LEDGER_COLUMNS = [
+  'price_daily: date, code, name, market, open, high, low, close, volume,',
+  '             value(거래대금), mktcap, shares(상장주식수), adj_factor',
+  'index_daily: date, index_name, open, high, low, close',
+  'instruments: code, name, market, sector, isin, corp_code, list_date',
+  'fundamental: 재무 항목 (DART)',
+  'disclosure:  공시 목록 (DART)',
+].join('\n');
+
+/**
+ * 문헌 심사 프롬프트 — 연도별로 훑어 온 논문 후보를 읽고 채택을 제안한다.
+ *
+ * 런타임의 QUANT 와 같은 데스크지만 하는 일이 다르다. 저쪽은 계산된 팩터를
+ * 읽고 종목 하나를 두고 제안하고, 이쪽은 **문헌을 읽고 시스템을 바꾸자고**
+ * 제안한다. 그래서 프롬프트를 따로 둔다.
+ */
+function buildPaperScanPrompt(scan) {
+  const year = scan.year;
+  const items = (scan.papers || []).map((p, i) =>
+    `[${i + 1}] ${p.authors} (${p.year}) "${p.title}". ${p.journal}` +
+    `${p.pages ? ', ' + p.pages : ''}${p.doi ? ' doi:' + p.doi : ''}` +
+    `\n    검색어: ${p.matched}  ·  추정 질문: ${p.question}`
+  ).join('\n');
+  const adopted = (scan.adopted || []).map((p) =>
+    `· ${p.authors} (${p.year}) ${p.title} [${p.question}]`).join('\n');
+
+  return [
+    '너는 퀀트 데스크(QUANT)의 문헌 심사 담당이다.',
+    '',
+    `아래는 ${year}년에 나온 논문 후보다. Crossref 를 연도별로 훑어 저널`,
+    '화이트리스트로 거른 것이고, **아직 채택된 것이 아니다.**',
+    '',
+    '[이 데스크가 답하는 네 질문]',
+    '  q1 얼마나 왔는가 — 회수계획 대비 진척',
+    '  q2 팔 수 있는가 — 처분 여건·거래비용',
+    '  q3 어떻게 팔 것인가 — 실행',
+    '  q4 지금이 그 때인가 — 시점·국면',
+    '',
+    '여기는 **이미 보유한 비상장 투자분이 상장된 뒤 파는 시점을 정하는 데스크**다.',
+    '진입 신호를 찾는 곳이 아니다. 그러므로 "유명한 퀀트 논문"이라는 것은 채택',
+    '사유가 아니다. 위 네 질문 중 하나를 실제로 바꾸지 못하면 기각하라.',
+    '',
+    '[이미 채택된 것 — 중복 제안 금지]',
+    adopted || '(없음)',
+    '',
+    '[원장이 가진 데이터 — 이 열로 계산할 수 없으면 구현 불가다]',
+    LEDGER_COLUMNS,
+    '',
+    `[${year}년 후보]`,
+    items || '(없음)',
+    '',
+    '각 후보에 대해 다음을 판정하라. 대부분은 기각이 정상이다.',
+    '',
+    '  판정   채택제안 / 보류 / 기각   (셋 중 하나)',
+    '  질문   q1~q4 중 어느 것을 바꾸는가 (기각이면 "해당 없음")',
+    '  근거   그 질문을 **어떻게** 바꾸는가. 한 문장.',
+    '  구현   위 원장 열만으로 계산되는가. 계산식을 적어라.',
+    '         계산할 수 없으면 "구현 불가 — 필요한 데이터: ..." 라고 적어라.',
+    '  주장   논문이 실제로 주장한 것',
+    '  유보   논문이 주장하지 않는 것 · 한국 코스닥 소형주에 옮길 때의 문제',
+    '',
+    '지켜야 할 것.',
+    '· 초록을 읽지 않았다면 제목만 보고 주장을 지어내지 마라. ' +
+      '"제목만으로는 판단 불가 — 원문 확인 필요" 가 정직한 답이다.',
+    '· 네 기억에서 이 논문의 결과를 꺼내지 마라. 위에 없는 것은 없는 것이다.',
+    '· 미국·대형주 표본의 결과를 한국 코스닥 소형주에 그대로 옮기지 마라.',
+    '· 채택제안은 **많아야 두 편**이다. 전부 채택하면 심사한 것이 아니다.',
+    '',
+    '',
+    '[채택제안한 논문은 구현까지 해라]',
+    '',
+    '판정이 "채택제안"인 논문에 대해서는 **실제로 돌아가는 파이썬 코드**를 써라.',
+    '아래 블록 형식을 그대로 지켜라. 형식이 틀리면 저장되지 않는다.',
+    '',
+    '```factor:<영문소문자_키>',
+    '# META: {"name":"한국어 이름","unit":"%","paper":"채택본_논문키",' +
+      '"question":"q2","claim":"논문이 주장한 것","limits":"주장하지 않는 것",' +
+      '"check":{"rate":0.002,"n":300,"win":60,"expect":23.0957,"tol":0.001}}',
+    'def compute(df, mkt, list_date, win):',
+    '    ...',
+    '    return 값, 관측수, 사유_또는_None',
+    '```',
+    '',
+    '이 코드는 **관문을 통과해야만 실린다.** 통과하지 못하면 그냥 버려진다.',
+    '',
+    '  · import 금지. eval·exec·open·getattr 금지. 던더(__) 접근 금지.',
+    '    바깥에서 이름을 끌어올 수 없다. 쓸 수 있는 것은 df · mkt · list_date ·',
+    '    win · pd · np · math 와 네가 만든 지역변수뿐이다.',
+    '  · df 는 날짜 오름차순이고 열은 위 원장 목록과 같다. mkt 는 시장 일간',
+    '    수익률(pandas Series) 이거나 None 이다. 값이 없으면 (None, n, 사유) 를',
+    '    돌려라 — 0 으로 채우지 마라.',
+    '  · **check.expect 가 가장 중요하다.** 하루 rate 씩 오르는 합성 계열',
+    '    (종가 = 1000 x (1+rate)^i, 고가 = 종가x1.01, 저가 = 종가x0.99,',
+    '     거래량 = 10000, 거래대금 = 종가x10000, 상장주식수 = 1e6)',
+    '    에서 네 함수가 낼 값을 **손으로 계산해서** 적어라. 틀리면 막힌다.',
+    '    계산할 수 없으면 채택제안하지 마라 — 검산되지 않은 계산은 싣지 않는다.',
+    '  · 이미 채택본에 있는 팩터를 다시 구현하지 마라.',
+    '마지막에 한 줄 요약을 붙여라 — ' +
+      `"${year}년: 후보 N편 중 채택제안 M편 (사유 한 문장)".`,
+  ].join('\n');
+}
+
 function buildPrompt(id, context = {}) {
+  // 문헌 심사는 시장 데이터가 필요 없다. 재료가 논문이라 경로가 통째로 다르다.
+  if (id === 'quant' && context.paperScan) {
+    return buildPaperScanPrompt(context.paperScan);
+  }
   const meta = AGENT_BY_ID[id];
   const market = context.market || {};
   const ind = market.indicators || {};
@@ -1285,6 +1394,48 @@ function mockScalpLevels(market) {
 }
 
 function mockResult(id, context = {}) {
+  // 문헌 심사는 재료가 논문이라 목업도 따로 둔다. 시장 목업을 그대로 쓰면
+  // 배선 시험에서 "돌았다"는 것만 확인되고 형식이 맞는지는 확인되지 않는다.
+  if (id === 'quant' && context.paperScan) {
+    const y = context.paperScan.year;
+    const n = (context.paperScan.papers || []).length;
+    const first = (context.paperScan.papers || [])[0];
+    const t = first ? `"${first.title}"` : '(후보 없음)';
+    return {
+      bubble: `${y}년 후보 ${n}편 심사 — 대부분 이 데스크의 질문을 바꾸지 못합니다.`,
+      report:
+        `[1] ${t}\n` +
+        `  판정   보류\n` +
+        `  질문   q2 팔 수 있는가\n` +
+        `  근거   거래비용 추정을 다루므로 처분 여건 절을 바꿀 여지가 있습니다.\n` +
+        `  구현   제목만으로는 계산식을 확정할 수 없습니다. 원장 열(close·high·low·` +
+        `value·volume·shares)로 계산 가능한지는 원문의 정의를 봐야 합니다.\n` +
+        `  주장   제목만으로는 판단 불가 — 원문 확인 필요\n` +
+        `  유보   미국·대형주 표본일 가능성이 높습니다. 한국 코스닥 소형주는 ` +
+        `거래대금이 상위 며칠에 몰려 같은 추정량이 다르게 움직입니다.\n` +
+        `\n` +
+        `나머지 후보는 진입 신호·포트폴리오 구성에 관한 것이라 이 데스크의 네 ` +
+        `질문을 바꾸지 못합니다. 여기는 이미 보유한 것을 파는 시점을 정하는 ` +
+        `데스크이지 살 것을 고르는 데스크가 아닙니다.\n` +
+        `\n` +
+        `${y}년: 후보 ${n}편 중 채택제안 1편 (거래비용 절을 바꿉니다)\n` +
+        '\n' +
+        '```factor:mock_mom_6_1\n' +
+        '# META: {"name":"6-1 모멘텀(목업)","unit":"%","paper":"jt1993",' +
+        '"question":"q1","claim":"과거 3~12개월 승자가 이후에도 이겼다",' +
+        '"limits":"미국 1965-1989 표본이다. 한국 코스닥 소형주 근거는 아니다",' +
+        '"check":{"rate":0.002,"n":300,"win":60,"expect":23.0957,"tol":0.001}}\n' +
+        'def compute(df, mkt, list_date, win):\n' +
+        '    c = df[\'close\']\n' +
+        '    if len(c) < 126:\n' +
+        '        return None, len(c), "일봉 126개가 필요합니다"\n' +
+        '    base = c.iloc[-126]\n' +
+        '    if not base:\n' +
+        '        return None, len(c), "기준 시점 종가가 0 입니다"\n' +
+        '    return float(c.iloc[-22] / base - 1.0) * 100.0, 126, None\n' +
+        '```',
+    };
+  }
   const market = (context && context.market) || {};
   const sym = market.display || market.symbol || '심볼';
   const SW = mockSwingLevels(market);
@@ -1468,5 +1619,5 @@ async function runAgent(id, context = {}, opts = {}) {
   return runAgentReal(id, prompt);
 }
 
-module.exports = { AGENTS, extractJson, runAgent, buildPrompt, checkClaudeAvailable,
-                   resolveClaudeBin, modelFor };
+module.exports = { AGENTS, extractJson, runAgent, buildPrompt, buildPaperScanPrompt,
+                   checkClaudeAvailable, resolveClaudeBin, modelFor, LEDGER_COLUMNS };

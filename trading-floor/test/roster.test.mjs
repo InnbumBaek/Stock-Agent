@@ -581,3 +581,135 @@ test('제안이 없으면 어디에도 붙지 않는다', () => {
     assert.ok(!buildPrompt(a.id, ctx).includes('퀀트 데스크 제안'), a.id);
   }
 });
+
+// ---------------------------------------------------------------------------
+// 문헌 심사 — 연도별로 훑어 온 후보를 읽고 **제안**한다.
+//
+// 여기서 막아야 하는 것은 하나다. 심사 결과가 저장소를 스스로 고치는 것.
+// 검산되지 않은 계산이 회의 자료에 조용히 실리는 것이 이 프로젝트가 막으려는
+// 실패이고, 그 경로가 여기서 열린다.
+// ---------------------------------------------------------------------------
+
+const scan = require('../server/paper-scan.js');
+const { buildPaperScanPrompt, LEDGER_COLUMNS } = require('../server/agents.js');
+
+function scanFixture() {
+  return {
+    year: 2025,
+    papers: [{
+      doi: '10.1111/jofi.99001', title: 'Liquidity and the Exit Decision',
+      journal: 'The Journal of Finance', year: 2025, authors: 'Kim, M.',
+      pages: '1-30', question: 'q2', matched: 'stock illiquidity measure',
+      adopted: false,
+    }],
+    adopted: [{ authors: 'Amihud, Y.', year: 2002, title: 'Illiquidity...', question: 'q2' }],
+  };
+}
+
+test('연도 구간을 읽는다', () => {
+  assert.deepEqual(scan.yearRange('2024-2026'), [2024, 2025, 2026]);
+  assert.equal(scan.yearRange('2026-2024'), null);   // 거꾸로면 거부
+  assert.equal(scan.yearRange('24-26'), null);
+  assert.equal(scan.yearRange(''), null);
+});
+
+test('--run 없이는 심사하지 않는다', () => {
+  // 연도 하나가 곧 claude 호출 하나다. 실수로 도는 경로를 두지 않는다.
+  assert.equal(scan.parseArgs(['--years', '2024-2026']).run, false);
+  assert.equal(scan.parseArgs(['--years', '2024-2026', '--run']).run, true);
+});
+
+test('심사 프롬프트는 네 질문과 원장 열을 함께 준다', () => {
+  const p = buildPaperScanPrompt(scanFixture());
+  for (const q of ['q1 얼마나 왔는가', 'q2 팔 수 있는가', 'q3 어떻게 팔 것인가',
+                   'q4 지금이 그 때인가']) {
+    assert.ok(p.includes(q), q);
+  }
+  // 원장에 없는 데이터를 요구하는 제안은 구현할 수 없다. 그 목록을 같이 준다.
+  assert.ok(p.includes('shares(상장주식수)'));
+  assert.ok(LEDGER_COLUMNS.includes('index_daily'));
+  // 이미 채택된 것을 다시 제안하면 심사가 아니다.
+  assert.match(p, /이미 채택된 것 — 중복 제안 금지/);
+  assert.match(p, /Amihud, Y\. \(2002\)/);
+});
+
+test('심사 프롬프트는 지어내기를 막는다', () => {
+  const p = buildPaperScanPrompt(scanFixture());
+  assert.match(p, /제목만 보고 주장을 지어내지 마라/);
+  assert.match(p, /네 기억에서 이 논문의 결과를 꺼내지 마라/);
+  // 전부 채택하면 심사한 것이 아니다.
+  assert.match(p, /채택제안은 \*\*많아야 두 편\*\*이다/);
+  // 이 데스크의 성격을 못 박는다 — 진입 신호를 찾는 곳이 아니다.
+  assert.match(p, /진입 신호를 찾는 곳이 아니다/);
+});
+
+test('심사는 시장 데이터를 요구하지 않는다', () => {
+  // 재료가 논문이라 경로가 통째로 다르다. 시세가 없어도 돌아야 한다.
+  const p = buildPrompt('quant', { paperScan: scanFixture() });
+  assert.ok(p.includes('문헌 심사 담당'));
+  assert.ok(!p.includes('가격 정보 없음'));
+});
+
+// ---------------------------------------------------------------------------
+// 구현까지 — 에이전트가 쓴 코드를 꺼내 관문 앞에 놓는다.
+//
+// 여기서 통과 여부를 판단하면 관문을 우회하는 셈이다. 이쪽이 하는 일은
+// "형식이 맞는 블록만 꺼내 파일로 놓기"까지다. 실을지 말지는 파이썬의
+// 정적·연기·검산·인용 네 관문이 정한다.
+// ---------------------------------------------------------------------------
+
+test('factor 블록을 꺼낸다', () => {
+  const r = [
+    '앞말',
+    '```factor:my_key',
+    '# META: {"name":"x"}',
+    'def compute(df, mkt, list_date, win):',
+    '    return 1.0, 1, None',
+    '```',
+    '뒷말',
+  ].join('\n');
+  const got = scan.extractFactors(r);
+  assert.equal(got.length, 1);
+  assert.equal(got[0].key, 'my_key');
+  assert.match(got[0].src, /def compute\(df, mkt, list_date, win\):/);
+});
+
+test('META 나 compute 가 없으면 꺼내지 않는다', () => {
+  // 관문에서 어차피 막히지만, 쓰레기 파일을 만들 이유가 없다.
+  const noMeta = '```factor:a\ndef compute(df, mkt, list_date, win):\n    pass\n```';
+  const noFn = '```factor:b\n# META: {"name":"x"}\nprint(1)\n```';
+  assert.equal(scan.extractFactors(noMeta).length, 0);
+  assert.equal(scan.extractFactors(noFn).length, 0);
+});
+
+test('키가 파일 이름이 되므로 좁게 받는다', () => {
+  // 경로 탈출·대문자·점이 파일 이름에 들어가면 그 자체가 구멍이다.
+  for (const bad of ['../evil', 'UPPER', 'a b', '.hidden', 'x/y', '1start']) {
+    const r = '```factor:' + bad + '\n# META: {"name":"x"}\n'
+      + 'def compute(df, mkt, list_date, win):\n    pass\n```';
+    assert.equal(scan.extractFactors(r).length, 0, bad);
+  }
+});
+
+test('심사 프롬프트는 구현 규칙과 검산을 요구한다', () => {
+  const p = buildPaperScanPrompt(scanFixture());
+  assert.match(p, /```factor:<영문소문자_키>/);
+  assert.match(p, /관문을 통과해야만 실린다/);
+  assert.match(p, /import 금지/);
+  // 검산이 핵심이다 — 기댓값을 못 적으면 채택제안하지 말라고 시킨다.
+  assert.match(p, /check\.expect 가 가장 중요하다/);
+  assert.match(p, /검산되지 않은 계산은 싣지 않는다/);
+});
+
+test('목업도 관문을 통과할 형식의 코드를 낸다', async () => {
+  // 배선만 확인하고 형식은 안 보는 목업은 시험이 아니다.
+  const { runAgent } = require('../server/agents.js');
+  const res = await runAgent('quant',
+    { paperScan: { year: 2025, papers: [{ title: 'T', authors: 'A', year: 2025,
+      journal: 'J', question: 'q1', matched: 'm' }], adopted: [] } },
+    { mock: true });
+  const got = scan.extractFactors(res.report);
+  assert.equal(got.length, 1);
+  assert.match(got[0].src, /"check":\{"rate":0\.002/);
+  assert.match(got[0].src, /"paper":"jt1993"/);
+});

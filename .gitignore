@@ -58,6 +58,7 @@ Thumbs.db
 .kis_token.json
 .api_verified.json
 .papers_candidates.json
+docs/proposals/
 .api_verified.tmp
 
 # ── 자동 실행 기록 ──────────────────────────────────────────────

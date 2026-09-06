@@ -29,6 +29,8 @@ ki_monitor.py — 상장 포트폴리오사 회수 판단 리포트 자동화 (�
 from __future__ import annotations
 
 import argparse
+import ast
+import math
 import io
 import json
 import os
@@ -5491,6 +5493,87 @@ def selftest() -> int:
             _assert(banned not in blk)
     check("팩터는 원장만 쓴다 (KIS·ECOS·FRED·네트워크 없음)", _factors_only_ledger)
 
+    # ── 에이전트가 구현한 팩터의 관문 ────────────────────────────────
+    #
+    # 여기서 막는 것은 "검산되지 않은 계산이 회의 자료에 실리는 것"입니다.
+    # 언어모델이 쓴 코드를 믿지 않고, 통과해야만 돌립니다.
+    def _plugin(src: str, key: str = "t"):
+        import tempfile as _tf
+        global PROPOSED_DIR
+        keep = PROPOSED_DIR
+        with _tf.TemporaryDirectory() as d:
+            PROPOSED_DIR = Path(d)
+            io.open(PROPOSED_DIR / f"{key}.py", "w", encoding="utf-8").write(src)
+            try:
+                got = load_proposed_factors()
+            finally:
+                PROPOSED_DIR = keep
+        return got[0] if got else None
+
+    def _M(expect):
+        return ('# META: {"name":"t","unit":"%","paper":"jt1993",'
+                '"claim":"c","limits":"l","check":{"rate":0.002,'
+                '"n":300,"win":60,"expect":' + str(expect) + '}}\n')
+    _GOOD = _M(23.0957) + (
+        "def compute(df, mkt, list_date, win):\n"
+        "    c = df['close']\n"
+        "    if len(c) < 126:\n"
+        "        return None, len(c), '일봉이 모자랍니다'\n"
+        "    return float(c.iloc[-22] / c.iloc[-126] - 1.0) * 100.0, 126, None\n")
+
+    check("검산을 통과한 구현은 실린다", lambda: _assert(
+        (_plugin(_GOOD) or {}).get("ok") is True))
+    check("기댓값이 틀리면 막힌다 (검산 관문)", lambda: _assert(
+        "검산 관문" in ((_plugin(_GOOD.replace("23.0957", "21.7203")) or {})
+                        .get("blocked") or "")))
+    check("기댓값이 없으면 막힌다", lambda: _assert(
+        "check" in ((_plugin('# META: {"name":"t","unit":"%","paper":"jt1993",'
+                             '"claim":"c","limits":"l"}\n'
+                             "def compute(df, mkt, list_date, win):\n"
+                             "    return 1.0, 1, None\n") or {})
+                    .get("blocked") or "")))
+
+    def _blocked(src_body, meta=None):
+        return (_plugin((meta or _M(1)) + src_body) or {}).get("blocked") or ""
+
+    check("import 는 막힌다", lambda: _assert(
+        "금지된 구문" in _blocked("import os\ndef compute(df, mkt, list_date, win):\n"
+                                  "    return 1.0, 1, None\n")))
+    check("open·eval 은 막힌다", lambda: _assert(
+        "금지된 호출" in _blocked("def compute(df, mkt, list_date, win):\n"
+                                  "    open('/etc/passwd')\n"
+                                  "    return 1.0, 1, None\n")))
+    check("던더 접근은 막힌다", lambda: _assert(
+        "던더" in _blocked("def compute(df, mkt, list_date, win):\n"
+                           "    return df.__class__, 1, None\n")))
+    check("바깥에서 끌어오는 이름은 막힌다", lambda: _assert(
+        "허용되지 않은 이름" in _blocked(
+            "def compute(df, mkt, list_date, win):\n"
+            "    return sys.maxsize, 1, None\n")))
+    check("지역변수는 막히지 않는다 (관문이 과하면 못 쓴다)", lambda: _assert(
+        (_plugin(_GOOD) or {}).get("ok") is True))
+    check("예외를 던지면 막힌다 (연기 관문)", lambda: _assert(
+        "연기 관문" in _blocked("def compute(df, mkt, list_date, win):\n"
+                                "    return 1.0 / 0, 1, None\n")))
+    check("시그니처가 다르면 막힌다", lambda: _assert(
+        "인자가" in _blocked("def compute(df):\n    return 1.0, 1, None\n")))
+    check("채택본에 없는 논문을 인용하면 막힌다", lambda: _assert(
+        "인용 관문" in _blocked(
+            "def compute(df, mkt, list_date, win):\n    return 1.0, 1, None\n",
+            '# META: {"name":"t","unit":"%","paper":"없는논문2099","claim":"c",'
+            '"limits":"l","check":{"expect":1}}\n')))
+
+    def _proposed_not_merged():
+        """제안 팩터가 채택본 목록에 섞이면 안 됩니다."""
+        con = _factor_ledger()
+        p = factors_payload(con, "111111", 60)
+        con.close()
+        adopted_keys = {x["key"] for x in p["factors"]}
+        for x in p.get("proposed", []):
+            _assert(x["key"] not in adopted_keys)
+            _assert("채택하기 전" in x["status"])
+    check("제안 팩터는 채택본과 섞이지 않는다", _proposed_not_merged)
+
     # 통합 계층 (3) — 원장 일봉 내보내기
     def _candles_ledger():
         """검증용 인메모리 원장. 3일치 · 마지막 날은 고가가 결측."""
@@ -7111,6 +7194,229 @@ FACTOR_DEFS = (
 )
 
 
+# ── 에이전트가 구현한 팩터 ────────────────────────────────────────────
+#
+# 퀀트 데스크가 논문을 읽고 **실제로 돌아가는 계산 코드**를 써서
+# stock-monitor/factors_proposed/<키>.py 에 넣습니다. 이 코드는 언어모델이
+# 쓴 것이므로 믿지 않습니다 — 대신 **관문을 통과해야만 돌립니다.**
+#
+#   ① 정적 관문   AST 로 뜯어 import·eval·exec·open·던더 접근·허용 밖 이름을
+#                 전부 거부합니다. 파일도 네트워크도 건드릴 수 없습니다.
+#   ② 계약 관문   compute(df, mkt, list_date, win) 가 있고 3-튜플을 내는가.
+#   ③ 연기 관문   합성 원장으로 실제로 돌려 봅니다. 예외를 던지거나 숫자가
+#                 아닌 것을 내면 싣지 않습니다.
+#   ④ 인용 관문   .papers.json 의 채택본을 인용해야 합니다.
+#
+# 통과해도 **채택본 팩터와 섞지 않습니다.** 별도 목록(proposed)으로 나가고
+# "에이전트 구현 · 사람이 채택하기 전" 이라는 딱지가 값에 붙어 다닙니다.
+# 그 딱지가 떨어지는 순간 이 시스템이 막으려던 실패가 시작됩니다.
+
+PROPOSED_DIR = ROOT / "factors_proposed"
+
+# 계산에 필요한 것만. 여기 없는 이름은 정적 관문에서 걸립니다.
+_GATE_ALLOWED_NAMES = {
+    "df", "mkt", "list_date", "win", "pd", "np", "math",
+    "compute", "float", "int", "len", "min", "max", "abs", "sum", "round",
+    "sorted", "range", "enumerate", "zip", "None", "True", "False",
+    "str", "bool", "list", "tuple", "dict", "set", "any", "all", "isinstance",
+}
+_GATE_BANNED_NODES = (
+    ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal,
+    ast.Delete, ast.With, ast.AsyncWith, ast.Try, ast.Raise,
+    ast.ClassDef, ast.AsyncFunctionDef, ast.Await, ast.Yield, ast.YieldFrom,
+    ast.Lambda,
+)
+_GATE_BANNED_CALLS = {
+    "eval", "exec", "open", "compile", "input", "__import__", "globals",
+    "locals", "vars", "getattr", "setattr", "delattr", "breakpoint", "exit",
+}
+
+
+def _gate_source(src: str) -> str | None:
+    """정적 관문. 통과하면 None, 막히면 사유를 돌려줍니다."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError as e:
+        return f"문법 오류: {e}"
+    # 코드 안에서 스스로 묶은 이름(지역변수·반복자·컴프리헨션 대상)은 허용합니다.
+    # 막아야 하는 것은 **바깥에서 끌어오는 자유 이름**입니다 — 그것이 파일·
+    # 네트워크·인터프리터 내부로 나가는 통로입니다.
+    bound = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, ast.FunctionDef):
+            bound.add(node.name)
+    allowed = _GATE_ALLOWED_NAMES | bound
+
+    for node in ast.walk(tree):
+        if isinstance(node, _GATE_BANNED_NODES):
+            return f"금지된 구문: {type(node).__name__}"
+        if isinstance(node, ast.Attribute) and node.attr.startswith("__"):
+            return f"던더 속성 접근: {node.attr}"
+        if isinstance(node, ast.Name):
+            if node.id.startswith("__"):
+                return f"던더 이름: {node.id}"
+            if isinstance(node.ctx, ast.Load) and node.id not in allowed:
+                return f"허용되지 않은 이름: {node.id}"
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in _GATE_BANNED_CALLS:
+                return f"금지된 호출: {node.func.id}"
+    fns = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+    if len(fns) != 1 or fns[0].name != "compute":
+        return "compute() 함수 하나만 있어야 합니다"
+    argnames = [a.arg for a in fns[0].args.args]
+    if argnames != ["df", "mkt", "list_date", "win"]:
+        return f"인자가 (df, mkt, list_date, win) 이어야 합니다 — 실제 {argnames}"
+    return None
+
+
+def _synth_ledger(rate: float = 0.002, n: int = 300) -> pd.DataFrame:
+    """검산용 합성 원장. 하루 rate 씩 오르므로 기댓값을 손으로 낼 수 있습니다."""
+    idx = pd.bdate_range("2025-01-01", periods=n)
+    c = 1000.0 * ((1.0 + rate) ** np.arange(n))
+    return pd.DataFrame({"date": idx.strftime("%Y-%m-%d"), "open": c, "high": c * 1.01,
+                         "low": c * 0.99, "close": c, "volume": 10000.0,
+                         "value": c * 10000.0, "shares": 1e6}, index=idx)
+
+
+def _gate_check(fn, chk: dict) -> str | None:
+    """검산 관문 — 이 시스템에서 가장 중요한 관문입니다.
+
+    에이전트가 **자기 계산이 무엇을 내야 하는지** 미리 적게 합니다. 알려진
+    계열에서 나올 값을 못 적으면, 그 계산은 검산된 적이 없는 것입니다.
+    검산되지 않은 계산이 회의 자료에 실리는 것이 이 프로젝트가 막으려는
+    실패이므로, 여기서 막습니다."""
+    if not isinstance(chk, dict):
+        return "META 에 check 가 없습니다 — 기댓값 없는 계산은 싣지 않습니다"
+    try:
+        rate = float(chk.get("rate", 0.002))
+        n = int(chk.get("n", 300))
+        win = int(chk.get("win", 60))
+        tol = float(chk.get("tol", 1e-4))
+    except (TypeError, ValueError) as e:
+        return f"check 의 숫자를 읽지 못했습니다: {e}"
+    if not (30 <= n <= 2000) or not (5 <= win <= 500):
+        return "check 의 n·win 이 범위를 벗어납니다"
+    if "expect" not in chk:
+        return "check.expect 가 없습니다 — 무엇이 나와야 하는지 적어야 합니다"
+    df = _synth_ledger(rate, n)
+    try:
+        val, _cnt, why = fn(df, None, chk.get("list_date", "2024-03-01"), win)
+    except Exception as e:                              # noqa: BLE001
+        return f"검산 중 예외: {type(e).__name__}: {e}"
+    exp = chk["expect"]
+    if exp is None:
+        if val is not None:
+            return f"값이 없어야 하는데 {val} 이 나왔습니다"
+        if not why:
+            return "값이 없으면 사유를 적어야 합니다"
+        return None
+    if val is None:
+        return f"{exp} 가 나와야 하는데 값이 비었습니다 ({why})"
+    try:
+        got, want = float(val), float(exp)
+    except (TypeError, ValueError):
+        return f"검산값을 숫자로 읽지 못했습니다: {val!r} vs {exp!r}"
+    if abs(got - want) > max(tol, abs(want) * tol):
+        return f"검산 불일치 — 기대 {want} · 실제 {got}"
+    return None
+
+
+def _gate_smoke(fn) -> str | None:
+    """연기 관문. 합성 원장으로 실제로 돌려 봅니다."""
+    df = _synth_ledger()
+    try:
+        out = fn(df, None, "2024-03-01", 60)
+    except Exception as e:                              # noqa: BLE001
+        return f"실행 중 예외: {type(e).__name__}: {e}"
+    if not (isinstance(out, tuple) and len(out) == 3):
+        return "반환값이 (값, n, 사유) 3-튜플이 아닙니다"
+    val, cnt, why = out
+    if val is not None:
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            return f"값이 숫자가 아닙니다: {type(val).__name__}"
+        if not np.isfinite(v):
+            return "값이 무한대·NaN 입니다"
+    if not isinstance(cnt, (int, float)):
+        return "관측 수가 숫자가 아닙니다"
+    if val is None and not why:
+        return "값이 없으면 사유를 적어야 합니다"
+    return None
+
+
+def load_proposed_factors() -> list[dict]:
+    """관문을 통과한 것만 돌려줍니다. 막힌 것도 사유와 함께 냅니다."""
+    out = []
+    if not PROPOSED_DIR.is_dir():
+        return out
+    known = set(papers())
+    for path in sorted(PROPOSED_DIR.glob("*.py")):
+        rec = {"key": path.stem, "file": path.name, "ok": False, "fn": None,
+               "meta": {}, "blocked": None}
+        try:
+            src = io.open(path, encoding="utf-8").read()
+        except OSError as e:
+            rec["blocked"] = f"읽지 못했습니다: {e}"
+            out.append(rec)
+            continue
+        why = _gate_source(src)
+        if why:
+            rec["blocked"] = f"정적 관문: {why}"
+            out.append(rec)
+            continue
+        meta = {}
+        m = re.search(r"^#\s*META:\s*(\{.*\})\s*$", src, re.M)
+        if m:
+            try:
+                meta = json.loads(m.group(1))
+            except ValueError:
+                meta = {}
+        rec["meta"] = meta
+        need = ("name", "unit", "paper", "claim", "limits", "check")
+        missing = [k for k in need if not meta.get(k)]
+        if missing:
+            rec["blocked"] = f"META 누락: {', '.join(missing)}"
+            out.append(rec)
+            continue
+        if meta["paper"] not in known:
+            rec["blocked"] = (f"인용 관문: '{meta['paper']}' 는 채택본에 없습니다 "
+                              f"(.papers.json)")
+            out.append(rec)
+            continue
+        # 여기서만 실행합니다. 정적 관문을 통과했으므로 import·파일·네트워크가
+        # 없고, 이름 공간도 아래 셋뿐입니다.
+        ns = {"pd": pd, "np": np, "math": math}
+        try:
+            exec(compile(src, str(path), "exec"), ns)    # noqa: S102
+        except Exception as e:                          # noqa: BLE001
+            rec["blocked"] = f"정의 중 예외: {type(e).__name__}: {e}"
+            out.append(rec)
+            continue
+        fn = ns.get("compute")
+        if not callable(fn):
+            rec["blocked"] = "compute 가 함수가 아닙니다"
+            out.append(rec)
+            continue
+        why = _gate_smoke(fn)
+        if why:
+            rec["blocked"] = f"연기 관문: {why}"
+            out.append(rec)
+            continue
+        why = _gate_check(fn, meta.get("check"))
+        if why:
+            rec["blocked"] = f"검산 관문: {why}"
+            out.append(rec)
+            continue
+        rec["ok"], rec["fn"] = True, fn
+        out.append(rec)
+    return out
+
+
 def factors_payload(con, code: str, win: int = 60) -> dict:
     """논문 팩터 한 벌. 전부 원장의 일봉만으로 계산합니다."""
     code = str(code).strip()
@@ -7174,6 +7480,31 @@ def factors_payload(con, code: str, win: int = 60) -> dict:
             "paper": pkey, "citation": cite(pkey), "claim": claim, "limits": limits,
             "reason": why,
         })
+    # ── 에이전트가 구현한 팩터 ─────────────────────────────────────
+    #
+    # **채택본과 섞지 않습니다.** 별도 목록으로 나가고, 값마다 "에이전트 구현"
+    # 이라는 딱지가 붙어 다닙니다. 관문에 막힌 것도 사유와 함께 냅니다 —
+    # 빠진 줄은 아무도 묻지 않기 때문입니다.
+    out["proposed"] = []
+    for rec in load_proposed_factors():
+        m = rec.get("meta") or {}
+        item = {"key": rec["key"], "file": rec["file"],
+                "status": "제안 — 검산 통과 · 사람이 채택하기 전",
+                "name": m.get("name") or rec["key"], "unit": m.get("unit"),
+                "paper": m.get("paper"), "citation": cite(m.get("paper", "")),
+                "claim": m.get("claim"), "limits": m.get("limits"),
+                "value": None, "n": 0, "reason": rec.get("blocked")}
+        if rec["ok"]:
+            try:
+                v, n_, why = rec["fn"](df, mkt, list_date, win)
+                item["value"] = None if v is None else float(v)
+                item["n"] = int(n_ or 0)
+                item["reason"] = why
+            except Exception as e:                      # noqa: BLE001
+                item["reason"] = f"실행 실패: {type(e).__name__}: {e}"
+            used.add(m.get("paper"))
+        out["proposed"].append(item)
+
     # 값은 없지만 §3 실행 시뮬레이션이 쓰는 가정이므로 출처를 함께 냅니다.
     used.add("athl2005")
     used.add("ac2000")

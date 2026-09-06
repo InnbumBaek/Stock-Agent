@@ -149,7 +149,7 @@ node server/export-brief.js --run --symbols 000250,058970 --mode algo
 # 주가 모니터링 — 회수 판단 리포트
 cd stock-monitor
 python ki_monitor.py daily      # 적재 → 리포트 (에이전트 절 없음)
-python ki_monitor.py selftest   # 127개 (키 불필요)
+python ki_monitor.py selftest   # 139개 (키 불필요)
 ```
 
 ```bash
@@ -157,7 +157,7 @@ python ki_monitor.py selftest   # 127개 (키 불필요)
 cd trading-floor
 node server/server.js           # http://localhost:8000
 # 데모 모드(claude CLI 없이): http://localhost:8000/?demo=1
-npm test                        # 200개
+npm test                        # 210개
 ```
 
 `--with-agents` 없이 만든 리포트는 통합 이전 원본 코드의 출력과 **바이트 단위로 같습니다.**

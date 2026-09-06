@@ -74,10 +74,10 @@ pip install pandas numpy scipy requests lxml
 
 ```bash
 cd stock-monitor
-python ki_monitor.py selftest        # 127개 통과해야 정상
+python ki_monitor.py selftest        # 139개 통과해야 정상
 
 cd ../trading-floor
-npm test                             # 200개 통과해야 정상
+npm test                             # 210개 통과해야 정상
 ```
 
 둘 다 통과하면 코드는 정상입니다. 여기서 실패하면 아래로 진행하지 마십시오.
