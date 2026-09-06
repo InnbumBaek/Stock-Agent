@@ -2110,6 +2110,20 @@ function init() {
 
   // SSE 연결 (현재 상태 replay 후 구독)
   connectStream();
+
+  // ?replay=latest — 가장 최근 분석의 대화를 바로 재생한다.
+  //
+  // 자동 실행(금요일 16:10)은 화면 없이 돌아 리포트만 남긴다. 그래서 화면을
+  // 나중에 열면 "실행만 되고 대화를 안 한 것"처럼 보인다. 대화는 리포트 안에
+  // 그대로 있으므로, 이 진입점이 그것을 화면으로 되돌린다.
+  //
+  // SSE 가 붙은 뒤에 시작해야 이벤트를 놓치지 않는다.
+  try {
+    const want = new URLSearchParams(location.search).get('replay');
+    if (want) {
+      setTimeout(() => startReplay(want === '1' ? 'latest' : want), 1200);
+    }
+  } catch (_) {}
 }
 
 if (document.readyState === 'loading') {

@@ -1256,7 +1256,29 @@ async function handleReplay(res, searchParams) {
   if (engine.running) return sendJson(res, 409, { error: '이미 분석이 진행 중입니다.' });
   if (replaying) return sendJson(res, 409, { error: '이미 재생이 진행 중입니다.' });
 
-  const file = (searchParams && searchParams.get('file')) || '';
+  let file = (searchParams && searchParams.get('file')) || '';
+
+  // file=latest — 가장 최근 리포트를 재생한다.
+  //
+  // 자동 실행(금요일 16:10)은 화면 없이 돌아 리포트만 남긴다. 그래서 "에이전트가
+  // 실행만 되고 대화를 안 한다"고 보인다. 대화는 리포트 안에 그대로 있고,
+  // 이 경로가 그것을 화면으로 되돌린다 — 파일 이름을 몰라도 되게 한다.
+  if (file === 'latest') {
+    let newest = null;
+    try {
+      const names = (await fsp.readdir(REPORTS_DIR)).filter((n) => n.endsWith('.md'));
+      for (const n of names) {
+        const st = await fsp.stat(path.join(REPORTS_DIR, n)).catch(() => null);
+        if (st && (!newest || st.mtimeMs > newest.t)) newest = { name: n, t: st.mtimeMs };
+      }
+    } catch (_) {}
+    if (!newest) {
+      return sendJson(res, 404, {
+        error: '재생할 리포트가 없습니다. 분석을 한 번 돌린 뒤에 다시 시도하십시오.',
+      });
+    }
+    file = newest.name;
+  }
   if (!file) return sendJson(res, 400, { error: 'file 파라미터가 필요합니다.' });
 
   // 경로 탈출 방지 + .md 만 허용 (기존 /reports 라우트와 동일한 규칙)

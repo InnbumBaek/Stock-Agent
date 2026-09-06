@@ -3,6 +3,14 @@ chcp 65001 >nul 2>&1
 title PIXEL TRADING FLOOR - 에이전트 실행
 cd /d "%~dp0trading-floor"
 
+rem  PIXEL_FLOOR.cmd          빈 화면으로 켭니다
+rem  PIXEL_FLOOR.cmd replay   가장 최근 분석의 대화를 바로 재생합니다
+rem
+rem  자동 실행(금요일 16:10)은 화면 없이 돌아 리포트만 남깁니다. 대화는 그
+rem  리포트 안에 그대로 있고, replay 가 그것을 화면으로 되돌립니다.
+set URL=http://localhost:8000
+if /I "%~1"=="replay" set URL=http://localhost:8000/?replay=latest
+
 echo.
 echo  ===============================================
 echo   에이전트 데스크를 켭니다
@@ -51,7 +59,10 @@ if errorlevel 1 (
 
 echo  브라우저가 열립니다. 창을 닫으면 서버가 꺼집니다.
 echo.
-start "" "http://localhost:8000"
+echo  ^> 지난 분석의 대화를 다시 보시려면 화면 오른쪽 [리플레이] 를 누르시거나,
+echo    이 파일을 PIXEL_FLOOR.cmd replay 로 실행하십시오.
+echo.
+start "" "%URL%"
 node server\server.js
 
 echo.

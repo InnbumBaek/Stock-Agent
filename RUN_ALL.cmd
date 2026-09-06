@@ -80,7 +80,7 @@ call :say "  ==============================================="
 call :say ""
 
 rem ---------------------------------------------------------- 0. 환경
-call :stage "0/5" "환경 점검"
+call :stage "0/6" "환경 점검"
 where node >nul 2>&1
 if errorlevel 1 (
   call :fail "Node 가 없습니다." "nodejs.org 에서 LTS 를 설치한 뒤 이 창을 닫고 새로 여십시오."
@@ -99,7 +99,7 @@ if errorlevel 1 (
 call :ok "Node · 파이썬 · 패키지"
 
 rem ---------------------------------------------------------- 1. API
-call :stage "1/5" "API 진단"
+call :stage "1/6" "API 진단"
 pushd stock-monitor
 %PY% ki_monitor.py diagnose > "%TEMP%\sa_diag.txt" 2>&1
 set DIAG=%ERRORLEVEL%
@@ -113,7 +113,7 @@ if not "%DIAG%"=="0" (
 call :ok "필수 API 정상"
 
 rem ---------------------------------------------------------- 2. 원장
-call :stage "2/5" "원장"
+call :stage "2/6" "원장"
 if exist "stock-monitor\ki.sqlite" (
   call :say "     이미 있습니다. 하루치만 갱신합니다 (1~2분)"
   pushd stock-monitor
@@ -136,14 +136,14 @@ if exist "stock-monitor\ki.sqlite" (
 )
 
 rem ---------------------------------------------------------- 3. 설정
-call :stage "3/5" "원장 연동 켜기"
+call :stage "3/6" "원장 연동 켜기"
 pushd trading-floor
 node -e "const fs=require('fs');const p='config.json';let c={};try{c=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){c={}};c.ki=Object.assign({},c.ki,{enabled:true});if(Array.isArray(c.watchlist)===false)c.watchlist=[];fs.writeFileSync(p,JSON.stringify(c,null,2));" >> "%LOG%" 2>&1
 popd
 call :ok "config.json"
 
 rem ---------------------------------------------------------- 4. 에이전트
-call :stage "4/5" "에이전트 분석"
+call :stage "4/6" "에이전트 분석"
 if /I "%MODE%"=="noai" (
   call :say "     건너뜁니다 (noai). 지난 판정이 있으면 그대로 실립니다."
   goto :report
@@ -182,7 +182,7 @@ popd
 
 rem ---------------------------------------------------------- 5. 리포트
 :report
-call :stage "5/5" "회의 자료"
+call :stage "5/6" "회의 자료"
 pushd stock-monitor
 %PY% ki_monitor.py report --market %MARKET% --with-agents >> "%LOG%" 2>&1
 if errorlevel 1 (
@@ -198,11 +198,36 @@ for /f "delims=" %%f in ('dir /b /o-d out\KI_exit_*.html 2^>nul') do (
 :done
 popd
 
+rem ---------------------------------------------------------- 6. 에이전트 화면
+rem
+rem  분석은 화면 없이 돕니다(export-brief). 그래서 리포트만 남고 "에이전트가
+rem  실행만 되고 대화를 안 한다"고 보입니다. 대화는 리포트 안에 그대로 있으니,
+rem  방금 그것을 화면으로 되돌려 줍니다.
+rem
+rem  서버는 새 창에서 계속 돕니다 - 이 창은 여기서 끝납니다.
+call :stage "6/6" "에이전트 화면 (방금 그 대화 재생)"
+if /I "%MODE%"=="auto" (
+  call :say "     auto 라 건너뜁니다. 나중에 PIXEL_FLOOR.cmd 로 보실 수 있습니다."
+  goto :after_floor
+)
+where node >nul 2>&1
+if errorlevel 1 goto :after_floor
+if not exist "trading-floor\reports\*.md" (
+  call :say "     재생할 대화가 없습니다 (분석이 저장되지 않았습니다)."
+  goto :after_floor
+)
+call :say "     새 창에서 화면을 켜고 브라우저를 엽니다."
+call :say "     창을 닫으면 화면이 꺼집니다. 리포트는 그대로 남습니다."
+start "PIXEL TRADING FLOOR" cmd /c "cd /d "%~dp0trading-floor" && node server\server.js"
+start "" "http://localhost:8000/?replay=latest"
+:after_floor
+
 call :say ""
 call :say "  ==============================================="
 call :say "   끝났습니다."
 call :say "  ==============================================="
 call :say ""
+call :say "   에이전트 대화를 다시 보시려면 PIXEL_FLOOR.cmd replay"
 call :say "   매일 자동으로 돌리시려면 SCHEDULE.cmd"
 call :say "   기록은 logs\%STAMP%-runall.log"
 goto :end

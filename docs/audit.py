@@ -125,6 +125,23 @@ for arg in sorted(wanted):
     has = f'"%MODE%"=="{arg}"' in runall
     (ok if has else bad)(f"RUN_ALL.cmd 가 '{arg}' 를 분기한다")
 
+print("\n[3-c] 에이전트 대화를 화면으로 되돌리는 경로가 이어져 있는가")
+# 자동 실행은 화면 없이 돌아 리포트만 남긴다. 대화는 그 안에 있고, 재생 경로가
+# 그것을 화면으로 되돌린다. 이 사슬 중 하나가 끊기면 "실행만 되고 대화를 안
+# 한다"로 보이는데, 오류는 어디에도 안 뜬다.
+_ra = (ROOT / "RUN_ALL.cmd").read_bytes().decode("utf-8")
+_pf = (ROOT / "PIXEL_FLOOR.cmd").read_bytes().decode("utf-8")
+_srv = (ROOT / "trading-floor" / "server" / "server.js").read_bytes().decode("utf-8")
+_app = (ROOT / "trading-floor" / "public" / "app.js").read_bytes().decode("utf-8")
+for label, ok_ in (
+    ("RUN_ALL 이 화면을 띄운다", "server\\\\server.js" in _ra or "server\\server.js" in _ra),
+    ("RUN_ALL 이 ?replay=latest 로 연다", "replay=latest" in _ra),
+    ("PIXEL_FLOOR 에 replay 인자가 있다", "replay=latest" in _pf),
+    ("서버가 file=latest 를 해석한다", "file === 'latest'" in _srv),
+    ("화면이 ?replay 를 읽어 재생한다", "get('replay')" in _app),
+):
+    (ok if ok_ else bad)(label)
+
 print("\n[4] 설정 키 동기화 — 한쪽에만 생기면 조용히 무시된다")
 r = subprocess.run(
     ["node", "-e",
