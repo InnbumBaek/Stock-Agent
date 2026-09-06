@@ -8,6 +8,7 @@ rem  평일 자동 실행을 등록하거나 해제합니다.
 rem
 rem  등록되는 것은 둘이고, 둘 다 RUN_ALL.cmd 를 부릅니다.
 rem
+rem    07:30  RUN_ALL.cmd papers    논문 수확 + 문헌 심사 (하루 최대 1해)
 rem    08:50  RUN_ALL.cmd morning   리포트만 (비용 없음)
 rem    16:10  RUN_ALL.cmd close     시세 적재 + 금요일엔 분석까지
 rem
@@ -21,6 +22,7 @@ echo  ===============================================
 echo   Stock-Agent 자동 실행
 echo  ===============================================
 echo.
+echo   07:30  논문 수확 + 문헌 심사  ^(평일 매일 . 대개 몇 초^)
 echo   08:50  아침 리포트 생성  ^(평일 매일 . 비용 없음^)
 echo   16:10  장 마감 시세 적재  ^(평일 매일^)
 echo          + 금요일에는 에이전트 분석까지  ^(40분~1시간^)
@@ -41,6 +43,10 @@ if errorlevel 2 goto :remove
 rem ---------------------------------------------------------- 등록
 :install
 echo.
+schtasks /Create /TN "StockAgent-Papers" /TR "\"%~dp0RUN_ALL.cmd\" papers" ^
+  /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 07:30 /F
+if errorlevel 1 goto :failed
+
 schtasks /Create /TN "StockAgent-Morning" /TR "\"%~dp0RUN_ALL.cmd\" morning" ^
   /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 08:50 /F
 if errorlevel 1 goto :failed
@@ -54,12 +60,14 @@ echo  ===============================================
 echo   등록됐습니다.
 echo  ===============================================
 echo.
-echo   기록:  logs 폴더 ^(-morning.log . -close.log^)
+echo   기록:  logs 폴더 ^(-papers.log . -morning.log . -close.log^)
 echo   해제:  이 파일을 다시 열어 [2]
 echo.
 echo   * 컴퓨터가 꺼져 있으면 그 시각은 건너뜁니다.
 echo     ^(켜져 있고 로그인돼 있어야 돕니다^)
 echo   * 금요일에는 17:30 까지 켜 두십시오. 분석이 그때까지 돕니다.
+echo   * 논문 심사는 하루 최대 한 해만 봅니다. 새 후보가 없는 날은
+echo     아무것도 하지 않습니다 ^(그게 정상입니다^).
 echo   * 원장이 아직 없다면 RUN_ALL.cmd 를 한 번 끝까지 돌리십시오.
 echo     원장이 있어야 아침 리포트가 나옵니다.
 echo.
@@ -74,6 +82,7 @@ goto :end
 rem ---------------------------------------------------------- 해제
 :remove
 echo.
+schtasks /Delete /TN "StockAgent-Papers" /F
 schtasks /Delete /TN "StockAgent-Morning" /F
 schtasks /Delete /TN "StockAgent-AfterClose" /F
 echo.
@@ -83,6 +92,9 @@ goto :end
 
 rem ---------------------------------------------------------- 상태
 :show
+echo.
+schtasks /Query /TN "StockAgent-Papers" 2>nul
+if errorlevel 1 echo   논문 작업: 등록돼 있지 않습니다.
 echo.
 schtasks /Query /TN "StockAgent-Morning" 2>nul
 if errorlevel 1 echo   아침 작업: 등록돼 있지 않습니다.

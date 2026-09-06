@@ -19,8 +19,9 @@ rem  ---- 아래 둘은 SCHEDULE.cmd 가 부르는 것입니다. 손으로 누�
 rem       일은 없지만, 자동 실행이 하는 일을 직접 확인하고 싶으면
 rem       그대로 쳐 보셔도 됩니다.
 rem
-rem    RUN_ALL.cmd morning  리포트만 만든다        (평일 08:50)
-rem    RUN_ALL.cmd close    시세 적재 + 금요일 분석 (평일 16:10)
+rem    RUN_ALL.cmd morning  리포트만 만든다          (평일 08:50)
+rem    RUN_ALL.cmd close    시세 적재 + 금요일 분석   (평일 16:10)
+rem    RUN_ALL.cmd papers   논문 수확 + 문헌 심사     (평일 07:30)
 rem
 rem  대상 시장을 바꾸려면 아래 MARKET 을 KOSPI 로 고치십시오.
 rem  네 갈래 전부 이 한 줄을 씁니다.
@@ -34,6 +35,7 @@ for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss
 set LOGNAME=runall
 if /I "%MODE%"=="morning" set LOGNAME=morning
 if /I "%MODE%"=="close" set LOGNAME=close
+if /I "%MODE%"=="papers" set LOGNAME=papers
 set LOG=%~dp0logs\%STAMP%-%LOGNAME%.log
 
 where python >nul 2>&1
@@ -57,6 +59,7 @@ schtasks /Query /TN "StockAgent-Morning" /FO LIST /V 2>nul | find /I "%~dp0RUN_A
 if not errorlevel 1 goto :sched_done
 schtasks /Create /TN "StockAgent-Morning" /TR "\"%~dp0RUN_ALL.cmd\" morning" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 08:50 /F >nul 2>&1
 schtasks /Create /TN "StockAgent-AfterClose" /TR "\"%~dp0RUN_ALL.cmd\" close" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 16:10 /F >nul 2>&1
+schtasks /Create /TN "StockAgent-Papers" /TR "\"%~dp0RUN_ALL.cmd\" papers" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 07:30 /F >nul 2>&1
 if errorlevel 1 (
   call :say "     [알림] 자동 실행이 옛 경로를 가리킵니다. 다시 등록하지 못했습니다."
   call :say "            SCHEDULE.cmd 를 관리자 권한으로 한 번 열어 주십시오."
@@ -68,6 +71,7 @@ if errorlevel 1 (
 rem  스케줄러가 부르는 두 갈래는 사람에게 물어보지 않고 곧장 갑니다.
 if /I "%MODE%"=="morning" goto :auto_morning
 if /I "%MODE%"=="close" goto :auto_close
+if /I "%MODE%"=="papers" goto :auto_papers
 
 call :say ""
 call :say "  ==============================================="
@@ -279,6 +283,50 @@ call :say "      종료 %TIME%"
 call :say "완료"
 exit /b 0
 
+rem ==========================================================
+rem  스케줄러 전용 - 평일 07:30  논문 수확 + 문헌 심사
+rem
+rem  두 단계의 성격이 다릅니다.
+rem
+rem   [1] 수확  Crossref 를 연도별로 훑어 후보에 쌓습니다. 공개 API 라
+rem             비용이 없습니다. 매일 돌려도 됩니다.
+rem   [2] 심사  퀀트 데스크가 후보를 읽고 채택을 제안합니다. claude 호출이라
+rem             비용이 있습니다. 그래서 **하루 최대 한 해**만 봅니다.
+rem             이미 본 해는 건너뛰고, 새 후보가 없으면 아무것도 안 합니다.
+rem
+rem  대부분의 날은 [2]가 그냥 넘어갑니다. 그게 정상입니다.
+rem
+rem  심사 결과는 docs\proposals\ 에 제안서로만 쌓입니다. 채택은 사람이
+rem  합니다 - .papers.json 도 팩터 코드도 이 작업이 고치지 않습니다.
+rem ==========================================================
+:auto_papers
+for /f %%i in ('powershell -NoProfile -Command "(Get-Date).Year"') do set YR=%%i
+set /a YR0=%YR%-13
+call :say "============================================"
+call :say " %DATE% %TIME%  -  논문 수확 + 문헌 심사"
+call :say "============================================"
+
+call :say "[1/3] 최근 2개 연도 수확 (Crossref - 비용 없음)"
+%PY% docs\fetch_papers.py --harvest-years 2 --max-per-year 25 >> "%LOG%" 2>&1
+if errorlevel 1 (
+  call :say "  [알림] 수확 실패 - 네트워크나 Crossref 쪽 문제입니다."
+  call :say "         쌓여 있는 후보로 심사만 이어서 합니다."
+)
+
+call :say "[2/3] 문헌 심사 (%YR0%-%YR% 중 새 후보가 있는 해 최대 1개)"
+pushd trading-floor
+node server\paper-scan.js --years %YR0%-%YR% --run --new-only --max-years 1 >> "%LOG%" 2>&1
+set RC=%ERRORLEVEL%
+popd
+if not "%RC%"=="0" (
+  call :say "  [알림] 심사를 돌리지 못했습니다. 기록을 보십시오."
+)
+
+call :say "[3/3] 연도별 현황"
+%PY% docs\fetch_papers.py >> "%LOG%" 2>&1
+call :say "완료 - 제안서는 docs\proposals\ 에 있습니다. 채택은 사람이 합니다."
+exit /b 0
+
 rem ---------------------------------------------------------- 유틸
 :say
 echo %~1
@@ -304,6 +352,7 @@ exit /b 0
 if /I "%MODE%"=="auto" goto :nopause
 if /I "%MODE%"=="morning" goto :nopause
 if /I "%MODE%"=="close" goto :nopause
+if /I "%MODE%"=="papers" goto :nopause
 pause
 :nopause
 endlocal

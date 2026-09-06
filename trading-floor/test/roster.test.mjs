@@ -713,3 +713,15 @@ test('목업도 관문을 통과할 형식의 코드를 낸다', async () => {
   assert.match(got[0].src, /"check":\{"rate":0\.002/);
   assert.match(got[0].src, /"paper":"jt1993"/);
 });
+
+test('자동 실행은 비용을 묶는다 — 새 후보가 있는 해만, 한 번에 몇 개만', () => {
+  // 평일마다 열 몇 해를 다시 심사하면 결과는 같은데 비용만 늘어난다.
+  const a = scan.parseArgs(['--years', '2013-2026', '--run', '--new-only',
+                            '--max-years', '1']);
+  assert.equal(a.newOnly, true);
+  assert.equal(a.maxYears, 1);
+  // 기본값은 껐다 — 손으로 돌릴 때는 시킨 것을 전부 해야 한다.
+  const b = scan.parseArgs(['--years', '2013-2026']);
+  assert.equal(b.newOnly, false);
+  assert.equal(b.maxYears, 0);
+});

@@ -54,13 +54,16 @@ function say(s) {
 }
 
 function parseArgs(argv) {
-  const out = { years: null, run: false, demo: false, out: OUT_DIR, help: false };
+  const out = { years: null, run: false, demo: false, out: OUT_DIR, help: false,
+                newOnly: false, maxYears: 0 };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--years') out.years = argv[++i];
     else if (a === '--run') out.run = true;
     else if (a === '--demo') out.demo = true;
     else if (a === '--out') out.out = argv[++i];
+    else if (a === '--new-only') out.newOnly = true;
+    else if (a === '--max-years') out.maxYears = Number(argv[++i]) || 0;
     else if (a === '-h' || a === '--help') out.help = true;
   }
   return out;
@@ -73,6 +76,8 @@ const HELP = `
   --run               실제로 심사합니다 (연도당 claude 호출 1회)
   --demo              --run 과 함께 — claude 없이 목업으로 (배선 확인용)
   --out <경로>        제안서를 쓸 폴더 (기본 docs/proposals)
+  --new-only          후보가 늘어난 해만 (이미 심사한 해는 건너뜁니다)
+  --max-years N       한 번에 심사할 연도 수 상한 (자동 실행에서 비용을 묶습니다)
 
 먼저 후보를 채워야 합니다:
   python docs/fetch_papers.py --harvest 2013-2026
@@ -120,11 +125,35 @@ async function main(argv) {
   const adoptedDoc = readJson(ADOPTED, { papers: {} });
   const adopted = Object.values(adoptedDoc.papers || {});
 
-  const plan = years
+  // 지난 심사 이력. 후보 수가 그대로면 다시 볼 이유가 없다 — 자동 실행에서
+  // 같은 해를 매일 다시 보면 비용만 늘고 결과는 같다.
+  const histFile = path.join(args.out, 'paper-scan.json');
+  const hist = readJson(histFile, { seen: {} });
+  const seen = (hist && hist.seen) || {};
+
+  let plan = years
     .map((y) => ({ year: y, papers: cand.by_year[String(y)] || [] }))
     .filter((x) => x.papers.length);
 
+  if (args.newOnly) {
+    const before = plan.length;
+    plan = plan.filter((x) => Number(seen[String(x.year)] || 0) !== x.papers.length);
+    if (before !== plan.length) {
+      say(`  이미 심사한 해 ${before - plan.length}개는 건너뜁니다 (--new-only).`);
+    }
+  }
+  if (args.maxYears > 0 && plan.length > args.maxYears) {
+    // 오래된 해부터 채운다 — 빈 곳을 먼저 메우는 편이 낫다.
+    say(`  ${plan.length}개 중 ${args.maxYears}개만 심사합니다 (--max-years).`);
+    plan = plan.slice(0, args.maxYears);
+  }
+
   if (!plan.length) {
+    if (args.newOnly) {
+      // 새 후보가 없는 것은 실패가 아니다. 평일 자동 실행에서는 이쪽이 정상이다.
+      say('새로 심사할 해가 없습니다 (후보가 늘지 않았습니다).');
+      return 0;
+    }
     say(`${args.years} 구간에 후보가 없습니다. --harvest 를 먼저 돌리십시오.`);
     return 1;
   }
@@ -211,8 +240,10 @@ async function main(argv) {
     say(`     → ${path.relative(process.cwd(), f)}`);
   }
 
-  const jf = path.join(args.out, 'paper-scan.json');
+  for (const r of results) seen[String(r.year)] = r.n;
+  const jf = histFile;
   fs.writeFileSync(jf, JSON.stringify({
+    seen,
     schema: 'quant.paperscan/1',
     scanned_at: new Date().toISOString(),
     years: args.years,

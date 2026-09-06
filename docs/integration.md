@@ -809,6 +809,23 @@ node server/paper-scan.js --years 2024-2026 --run   # ③ 실제 심사 (연도�
 `paper-scan.js` 는 `.papers.json` 도 팩터 코드도 고치지 않는다. 제안서는
 `docs/proposals/`(gitignore)에 쓴다.
 
+#### 평일 자동 실행 — `RUN_ALL.cmd papers` (07:30)
+
+수확은 공짜고 심사는 claude 호출이다. 성격이 다르므로 다르게 돌린다.
+
+```cmd
+python docs\fetch_papers.py --harvest-years 2 --max-per-year 25
+node server\paper-scan.js --years <올해-13>-<올해> --run --new-only --max-years 1
+python docs\fetch_papers.py
+```
+
+- `--harvest-years N` 은 오늘 날짜에서 센다. 구간을 박아 두면 해가 바뀌는
+  순간 새 논문을 영영 못 본다.
+- `--new-only` 는 후보 수가 그대로인 해를 건너뛴다. 이력은
+  `docs/proposals/paper-scan.json` 의 `seen` 에 남는다.
+- `--max-years 1` 로 **하루 최대 claude 호출 1회**. 대부분의 날은 새 후보가
+  없어 0회다 — 그게 정상이고, 그때 `--new-only` 는 실패가 아니라 0 을 낸다.
+
 받는 쪽은 `ki-bridge.js` 의 `fetchKiFactors()` → `formatKiFactorLines()` 이고,
 **퀀트 데스크(QUANT) 한 명에게만** 간다. QUANT 는 그것을 읽고 *다른 에이전트에게
 어떻게 볼지 제안*하며, 그 제안은 DIANA·FLOW·RED·ACE·PM 다섯 자리에 "판정 아님"
@@ -820,7 +837,7 @@ node server/paper-scan.js --years 2024-2026 --run   # ③ 실제 심사 (연도�
 
 ```bash
 cd stock-monitor  && python ki_monitor.py selftest    # 139개 (기존 64 + 통합 53)
-cd trading-floor  && npm test                          # 210개 (기존 68 + 통합 125)
+cd trading-floor  && npm test                          # 211개 (기존 68 + 통합 125)
 ```
 
 통합이 지키기로 한 것 중 **테스트가 실제로 강제하는 것**:

@@ -32,6 +32,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / "stock-monitor"
@@ -262,9 +263,18 @@ def main() -> int:
     ap.add_argument("--verify", action="store_true", help="채택본을 Crossref 로 재대조")
     ap.add_argument("--write", action="store_true", help="재대조에서 어긋난 곳을 갱신")
     ap.add_argument("--harvest", metavar="2013-2026", help="이 연도 구간을 훑어 후보에 쌓기")
+    ap.add_argument("--harvest-years", type=int, metavar="N",
+                    help="올해를 포함한 최근 N개 연도를 훑기 (자동 실행용 — "
+                         "달력이 넘어가도 구간을 고쳐 줄 필요가 없습니다)")
     ap.add_argument("--max-per-year", type=int, default=25, help="연도당 후보 상한 (기본 25)")
     a = ap.parse_args()
 
+    if a.harvest_years:
+        # 자동 실행에서 "2013-2026" 을 박아 두면 해가 바뀌는 순간 새 논문을
+        # 영영 못 봅니다. 그래서 오늘 날짜에서 셉니다.
+        n = max(1, min(int(a.harvest_years), 30))
+        this_year = date.today().year
+        return harvest(this_year - n + 1, this_year, max(1, a.max_per_year))
     if a.harvest:
         m = re.fullmatch(r"(\d{4})-(\d{4})", a.harvest.strip())
         if not m:
