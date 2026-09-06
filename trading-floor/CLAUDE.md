@@ -11,7 +11,7 @@ AI 에이전트들이 시장 데이터를 분석하고 토론해 매매 판정�
 node server/server.js          # http://localhost:8000
 # 포트 충돌 시: PORT=8123 node server/server.js
 # Windows: start-floor.cmd 더블클릭
-npm test                       # 211개 단위 테스트
+npm test                       # 214개 단위 테스트
 ```
 
 의존성 설치 불필요 — `package.json`에 dependencies가 없고 Node 내장 모듈만 쓴다.

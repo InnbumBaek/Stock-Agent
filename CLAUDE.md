@@ -157,7 +157,7 @@ diff 에 잡혀 실제 변경이 묻힌다. 편집 후 `file <파일>` 로 확�
 
 ```bash
 cd stock-monitor && python ki_monitor.py selftest   # 139개 (키·네트워크 불필요)
-cd trading-floor && npm test                         # 211개
+cd trading-floor && npm test                         # 214개
 python docs/audit.py                                 # 저장소 전반 (줄바꿈·배치·설정키·유출)
 ```
 

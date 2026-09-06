@@ -157,7 +157,7 @@ python ki_monitor.py selftest   # 139개 (키 불필요)
 cd trading-floor
 node server/server.js           # http://localhost:8000
 # 데모 모드(claude CLI 없이): http://localhost:8000/?demo=1
-npm test                        # 211개
+npm test                        # 214개
 ```
 
 `--with-agents` 없이 만든 리포트는 통합 이전 원본 코드의 출력과 **바이트 단위로 같습니다.**

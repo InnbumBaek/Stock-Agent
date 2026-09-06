@@ -38,7 +38,30 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent / "stock-monitor"
 ADOPTED = ROOT / ".papers.json"
 CANDIDATES = ROOT / ".papers_candidates.json"
-API = "https://api.crossref.org/works"
+CROSSREF = "https://api.crossref.org/works"
+API = CROSSREF                      # 재대조(--verify)는 Crossref 로 한다
+ARXIV = "http://export.arxiv.org/api/query"
+OPENALEX = "https://api.openalex.org/works"
+
+# arXiv 의 계량금융 분류. **퀀트 트레이딩 논문이 공개 API 로 가장 많이 모이는
+# 곳**이 여기다. 특히 q-fin.TR(거래·시장미시구조)과 q-fin.PM(포트폴리오 관리)은
+# 이 데스크의 질문과 곧바로 맞물린다.
+#
+# 다만 arXiv 는 **프리프린트**다. 동료심사를 거치지 않았다. 그래서 후보에
+# 등급을 달아 둔다 — 저널 게재본과 같은 무게로 읽으면 CLAUDE.md 5항이
+# 무너진다.
+ARXIV_CATS = {
+    "q-fin.TR": "거래·시장미시구조",
+    "q-fin.PM": "포트폴리오 관리",
+    "q-fin.ST": "통계적 금융",
+    "q-fin.CP": "전산금융",
+    "q-fin.RM": "위험관리",
+    "q-fin.MF": "수리금융",
+    "q-fin.PR": "가격결정",
+    "q-fin.GN": "일반금융",
+}
+GRADE_JOURNAL = "저널 게재 (동료심사)"
+GRADE_PREPRINT = "프리프린트 (동료심사 전)"
 UA = {"User-Agent": "ki-monitor-paper-harvest (contact via repository owner)"}
 
 # 근거 등급으로 올릴 수 있는 게재지. 여기 없으면 후보에도 넣지 않는다.
@@ -198,6 +221,118 @@ def verify(write: bool) -> int:
     return 1 if (bad and not write) else 0
 
 
+# ── 소스별 수확기 ─────────────────────────────────────────────────────
+#
+# 세 곳에서 가져온다. 성격이 달라 등급도 다르다.
+#
+#   arXiv q-fin  퀀트 트레이딩 논문이 공개 API 로 가장 많이 모이는 곳.
+#                초록이 전문 그대로 온다 — 제목만 보고 판단하지 않아도 된다.
+#                다만 **프리프린트**다. 동료심사를 거치지 않았다.
+#   OpenAlex     2억 5천만 건. 저널·프리프린트·SSRN 색인분까지 폭이 가장 넓고,
+#                피인용 수가 함께 온다. 초록은 역색인이라 되살려야 한다.
+#   Crossref     게재된 저널 논문의 기록. 발행 정보가 가장 정확해 재대조에 쓴다.
+#
+# SSRN 은 퀀트 파이낸스 워킹페이퍼가 가장 많이 올라오는 곳이지만 **공개 API 가
+# 없다**(Elsevier). 긁어 오는 것은 이용약관 위반이라 하지 않는다. 대신 OpenAlex
+# 가 색인한 SSRN 프리프린트가 여기로 함께 들어온다.
+
+
+def _get_text(url: str) -> str | None:
+    try:
+        req = urllib.request.Request(url, headers=UA)
+        with urllib.request.urlopen(req, timeout=40) as r:
+            return r.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError):
+        return None
+
+
+def harvest_arxiv(year: int, cap: int) -> list[dict]:
+    """arXiv q-fin — 계량금융 분류를 연도별로 훑는다. 초록이 전문으로 온다."""
+    from defusedxml import ElementTree as DET
+    NS = {"a": "http://www.w3.org/2005/Atom"}
+    out, seen = [], set()
+    for cat, ko in ARXIV_CATS.items():
+        q = (f"cat:{cat}+AND+submittedDate:[{year}01010000+TO+{year}12312359]")
+        url = (f"{ARXIV}?search_query={q}&start=0&max_results={min(cap, 100)}"
+               f"&sortBy=submittedDate&sortOrder=descending")
+        body = _get_text(url)
+        time.sleep(3.0)                 # arXiv 는 3초 간격을 요청한다
+        if not body:
+            continue
+        try:
+            root = DET.fromstring(body)
+        except Exception:                               # noqa: BLE001
+            continue
+        for e in root.findall("a:entry", NS):
+            aid = (e.findtext("a:id", "", NS) or "").rsplit("/", 1)[-1]
+            if not aid or aid in seen:
+                continue
+            seen.add(aid)
+            names = [a.findtext("a:name", "", NS)
+                     for a in e.findall("a:author", NS)][:4]
+            out.append({
+                "arxiv_id": aid, "doi": e.findtext("a:doi", None, NS),
+                "title": " ".join((e.findtext("a:title", "", NS) or "").split()),
+                "abstract": " ".join(
+                    (e.findtext("a:summary", "", NS) or "").split())[:1200],
+                "journal": f"arXiv {cat} ({ko})", "year": year,
+                "authors": " and ".join(names) or "(저자 미상)",
+                "pages": None, "source": "arXiv", "venue_grade": GRADE_PREPRINT,
+                "cited_by": None, "matched": cat, "adopted": False,
+            })
+    return out
+
+
+def _openalex_abstract(inv) -> str:
+    """OpenAlex 는 초록을 역색인으로 준다. 위치대로 되살린다."""
+    if not isinstance(inv, dict) or not inv:
+        return ""
+    slots = {}
+    for word, poss in inv.items():
+        for p in poss or []:
+            slots[p] = word
+    return " ".join(slots[k] for k in sorted(slots))[:1200]
+
+
+def harvest_openalex(year: int, cap: int, terms: list[tuple]) -> list[dict]:
+    """OpenAlex — 폭이 가장 넓다. 피인용 수가 함께 오고 초록도 있다."""
+    out, seen = [], set()
+    for q, term in terms:
+        url = (f"{OPENALEX}?" + urllib.parse.urlencode({
+            "filter": f"publication_year:{year},type:article",
+            "search": term, "per-page": 40, "sort": "cited_by_count:desc",
+        }))
+        body = get(url)
+        time.sleep(0.3)
+        for it in (body or {}).get("results", []):
+            oid = it.get("id")
+            if not oid or oid in seen:
+                continue
+            src = ((it.get("primary_location") or {}).get("source") or {})
+            journal = src.get("display_name") or ""
+            is_journal = journal_ok(journal)
+            is_ssrn = "ssrn" in journal.lower()
+            if not (is_journal or is_ssrn):
+                continue                # 화이트리스트 밖은 후보에도 안 넣는다
+            seen.add(oid)
+            out.append({
+                "arxiv_id": None,
+                "doi": (it.get("doi") or "").replace("https://doi.org/", "") or None,
+                "title": it.get("display_name") or "",
+                "abstract": _openalex_abstract(it.get("abstract_inverted_index")),
+                "journal": journal, "year": year,
+                "authors": " and ".join(
+                    (a.get("author") or {}).get("display_name", "")
+                    for a in (it.get("authorships") or [])[:4]) or "(저자 미상)",
+                "pages": (it.get("biblio") or {}).get("first_page"),
+                "source": "OpenAlex",
+                "venue_grade": GRADE_PREPRINT if is_ssrn else GRADE_JOURNAL,
+                "cited_by": it.get("cited_by_count"),
+                "matched": term, "question": q, "adopted": False,
+            })
+    return out[:cap]
+
+
 # ── 연도별 수확 ───────────────────────────────────────────────────────
 
 def harvest(y0: int, y1: int, cap: int) -> int:
@@ -212,17 +347,38 @@ def harvest(y0: int, y1: int, cap: int) -> int:
     for y in doc["by_year"].values():
         have |= {norm(x.get("doi")) for x in y}
 
+    flat_terms = [(q, t) for q, ts in TERMS.items() for t in ts]
     total = 0
     for year in range(y0, y1 + 1):
         found, seen_this_year = [], set()
+
+        # ① arXiv q-fin — 퀀트 트레이딩이 가장 많이 모이는 공개 API
+        for it in harvest_arxiv(year, cap):
+            k = norm(it.get("arxiv_id") or it.get("doi"))
+            if not k or k in have or k in seen_this_year:
+                continue
+            seen_this_year.add(k)
+            it.setdefault("question", "q1")
+            found.append(it)
+
+        # ② OpenAlex — 폭이 가장 넓다 (SSRN 색인분 포함)
+        for it in harvest_openalex(year, cap, flat_terms):
+            k = norm(it.get("doi") or it.get("title"))
+            if not k or k in have or k in seen_this_year:
+                continue
+            seen_this_year.add(k)
+            found.append(it)
+
+        # ③ Crossref — 게재된 저널 논문의 기록
         for q, terms in TERMS.items():
             for term in terms:
-                url = (f"{API}?" + urllib.parse.urlencode({
+                url = (f"{CROSSREF}?" + urllib.parse.urlencode({
                     "query.bibliographic": term,
                     "filter": (f"from-pub-date:{year}-01-01,"
                                f"until-pub-date:{year}-12-31,type:journal-article"),
                     "rows": 40,
-                    "select": "DOI,title,container-title,issued,page,author",
+                    "select": ("DOI,title,container-title,issued,page,author,"
+                               "abstract,is-referenced-by-count"),
                     "sort": "is-referenced-by-count", "order": "desc",
                 }))
                 body = get(url)
@@ -238,17 +394,28 @@ def harvest(y0: int, y1: int, cap: int) -> int:
                         continue          # 화이트리스트 밖은 후보에도 안 넣는다
                     seen_this_year.add(doi)
                     found.append({
+                        "arxiv_id": None,
                         "doi": it.get("DOI"), "title": (it.get("title") or [""])[0],
+                        "abstract": re.sub(r"<[^>]+>", " ",
+                                           it.get("abstract") or "")[:1200].strip(),
                         "journal": journal, "year": year,
                         "authors": authors_of(it), "pages": it.get("page"),
+                        "source": "Crossref", "venue_grade": GRADE_JOURNAL,
+                        "cited_by": it.get("is-referenced-by-count"),
                         "question": q, "matched": term, "adopted": False,
                     })
+        # 초록이 있는 것을 앞에 둔다. 제목만 있는 것은 심사에서 "판단 불가"가
+        # 되므로, 상한에 걸려 잘릴 때 초록 있는 쪽이 남아야 한다.
+        found.sort(key=lambda x: (not x.get("abstract"),
+                                  -(x.get("cited_by") or 0)))
         found = found[:cap]
         if found:
             doc["by_year"][str(year)] = found
             total += len(found)
-        print(f"  {year}  후보 {len(found):>3}편"
-              + (f"   예: {found[0]['title'][:52]}" if found else ""))
+        by_src = Counter(x.get("source", "?") for x in found)
+        n_abs = sum(1 for x in found if x.get("abstract"))
+        print(f"  {year}  후보 {len(found):>3}편  (초록 {n_abs}건)  "
+              + " · ".join(f"{k} {v}" for k, v in sorted(by_src.items())))
 
     doc["harvested"] = f"{y0}-{y1}"
     save(CANDIDATES, doc)

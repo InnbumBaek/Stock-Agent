@@ -530,11 +530,23 @@ const LEDGER_COLUMNS = [
  */
 function buildPaperScanPrompt(scan) {
   const year = scan.year;
-  const items = (scan.papers || []).map((p, i) =>
-    `[${i + 1}] ${p.authors} (${p.year}) "${p.title}". ${p.journal}` +
-    `${p.pages ? ', ' + p.pages : ''}${p.doi ? ' doi:' + p.doi : ''}` +
-    `\n    검색어: ${p.matched}  ·  추정 질문: ${p.question}`
-  ).join('\n');
+  const items = (scan.papers || []).map((p, i) => {
+    const id = p.doi ? ` doi:${p.doi}` : (p.arxiv_id ? ` arXiv:${p.arxiv_id}` : '');
+    const cited = p.cited_by === null || p.cited_by === undefined
+      ? '' : `  ·  피인용 ${p.cited_by}`;
+    const out = [
+      `[${i + 1}] ${p.authors} (${p.year}) "${p.title}". ${p.journal}` +
+        `${p.pages ? ', ' + p.pages : ''}${id}`,
+      `    등급: ${p.venue_grade || '미상'}  ·  출처: ${p.source || '미상'}` +
+        `  ·  검색어: ${p.matched}${cited}`,
+    ];
+    // 초록이 있으면 그것으로 판단한다. 없으면 없다고 적는다 — 제목만 보고
+    // 주장을 지어내는 것이 이 자리에서 가장 흔한 사고다.
+    out.push(p.abstract
+      ? `    초록: ${String(p.abstract).slice(0, 900)}`
+      : '    초록: 없음 — 제목과 게재지만 보고 판단해야 한다');
+    return out.join('\n');
+  }).join('\n\n');
   const adopted = (scan.adopted || []).map((p) =>
     `· ${p.authors} (${p.year}) ${p.title} [${p.question}]`).join('\n');
 
@@ -574,8 +586,13 @@ function buildPaperScanPrompt(scan) {
     '  유보   논문이 주장하지 않는 것 · 한국 코스닥 소형주에 옮길 때의 문제',
     '',
     '지켜야 할 것.',
-    '· 초록을 읽지 않았다면 제목만 보고 주장을 지어내지 마라. ' +
-      '"제목만으로는 판단 불가 — 원문 확인 필요" 가 정직한 답이다.',
+    '· 초록이 붙어 있으면 그것으로 판단하라. 초록이 "없음"인 후보는 제목만 ' +
+      '보고 주장을 지어내지 마라 — "초록 없음 — 원문 확인 필요" 가 정직한 답이다.',
+    '· **등급을 무시하지 마라.** 프리프린트는 동료심사를 거치지 않았다. 결과가 ' +
+      '뒤집히거나 게재되지 못한 채 남는 일이 흔하다. 프리프린트를 채택제안하려면 ' +
+      '왜 지금 쓸 만한지를 따로 적어라.',
+    '· 피인용 수는 참고일 뿐이다. 최근 논문은 인용이 쌓일 시간이 없었고, 많이 ' +
+      '인용된 것이 이 데스크에 쓸모 있다는 뜻도 아니다.',
     '· 네 기억에서 이 논문의 결과를 꺼내지 마라. 위에 없는 것은 없는 것이다.',
     '· 미국·대형주 표본의 결과를 한국 코스닥 소형주에 그대로 옮기지 마라.',
     '· 채택제안은 **많아야 두 편**이다. 전부 채택하면 심사한 것이 아니다.',

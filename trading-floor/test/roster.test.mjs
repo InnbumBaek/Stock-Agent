@@ -725,3 +725,38 @@ test('자동 실행은 비용을 묶는다 — 새 후보가 있는 해만, 한 
   assert.equal(b.newOnly, false);
   assert.equal(b.maxYears, 0);
 });
+
+test('후보에 초록·등급·출처가 함께 간다', () => {
+  const p = buildPaperScanPrompt({
+    year: 2025, adopted: [],
+    papers: [{
+      authors: 'Kim, M.', year: 2025, title: 'Optimal Liquidation',
+      journal: 'arXiv q-fin.TR (거래·시장미시구조)', arxiv_id: '2501.00001v1',
+      source: 'arXiv', venue_grade: '프리프린트 (동료심사 전)',
+      matched: 'q-fin.TR', abstract: 'We study optimal liquidation.', cited_by: null,
+    }],
+  });
+  assert.match(p, /arXiv:2501\.00001v1/);
+  assert.match(p, /등급: 프리프린트 \(동료심사 전\)/);
+  assert.match(p, /출처: arXiv/);
+  assert.match(p, /초록: We study optimal liquidation\./);
+});
+
+test('초록이 없으면 없다고 적는다', () => {
+  // 빠진 줄은 아무도 묻지 않는다. 없으면 없다는 것이 보여야 한다.
+  const p = buildPaperScanPrompt({
+    year: 2025, adopted: [],
+    papers: [{ authors: 'A', year: 2025, title: 'T', journal: 'The Journal of Finance',
+      doi: '10.1/x', source: 'OpenAlex', venue_grade: '저널 게재 (동료심사)',
+      matched: 'm', abstract: '', cited_by: 42 }],
+  });
+  assert.match(p, /초록: 없음 — 제목과 게재지만 보고 판단해야 한다/);
+  assert.match(p, /피인용 42/);
+});
+
+test('프리프린트를 저널과 같은 무게로 읽지 말라고 시킨다', () => {
+  const p = buildPaperScanPrompt(scanFixture());
+  assert.match(p, /등급을 무시하지 마라/);
+  assert.match(p, /프리프린트는 동료심사를 거치지 않았다/);
+  assert.match(p, /피인용 수는 참고일 뿐이다/);
+});
