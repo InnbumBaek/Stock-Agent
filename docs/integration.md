@@ -791,9 +791,9 @@ python ki_monitor.py report --market KOSPI --with-agents
   SSRN 은 셀프서비스 API 가 없다(Elsevier). 긁지 않는다 — Semantic Scholar·
   OpenAlex 색인분으로 들어온다.
 
-  키는 전부 선택이다. `.env` 의 `PAPERS_CONTACT_EMAIL`(Crossref·OpenAlex 의
-  polite pool — 신청 절차 없음)과 `S2_API_KEY`(Semantic Scholar 무료 신청)를
-  넣으면 더 안정적으로 돌 뿐, 없어도 넷 다 돈다.
+  키를 쓰는 곳은 `.env` 의 `S2_API_KEY`(Semantic Scholar 무료 신청) 하나다.
+  나머지 셋은 키 없이 부르고, 대신 호출 간격을 넉넉히 둔다(arXiv 3초, 나머지
+  1초). 키가 없어도 넷 다 돈다 — 공용 풀에서 더 천천히 돌 뿐이다.
   각 후보는 `abstract` · `venue_grade` · `cited_by` · `source` 를 달고 나가고,
   상한에 걸려 잘릴 때 **초록 있는 것이 먼저 남는다.**
 

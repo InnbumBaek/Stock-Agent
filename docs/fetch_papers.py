@@ -67,14 +67,16 @@ GRADE_JOURNAL = "저널 게재 (동료심사)"
 GRADE_PREPRINT = "프리프린트 (동료심사 전)"
 
 
-# ── 키와 연락처 ───────────────────────────────────────────────────────
+# ── API 키 ────────────────────────────────────────────────────────────
 #
-# 키가 없어도 넷 다 돕니다. 있으면 더 안정적으로 돌 뿐입니다.
+# 키를 쓰는 곳은 한 곳뿐입니다.
 #
-#   S2_API_KEY            Semantic Scholar. 무료 신청 — 키가 없으면 전 세계가
-#                         나눠 쓰는 공용 풀이라 429 가 잦습니다.
-#   PAPERS_CONTACT_EMAIL  Crossref·OpenAlex 의 'polite pool'. 키가 아니라
-#                         연락처입니다. 넣으면 더 빠르고 덜 끊깁니다.
+#   S2_API_KEY   Semantic Scholar. 무료 신청 —
+#                https://www.semanticscholar.org/product/api#api-key-form
+#                키가 없으면 전 세계가 나눠 쓰는 공용 풀이라 429 가 잦습니다.
+#
+# arXiv·OpenAlex·Crossref 는 키 없이 공개 API 로 받습니다. 대신 호출 간격을
+# 넉넉히 둡니다 — 익명 풀에서 몰아치면 막히는 쪽은 이쪽입니다.
 #
 # .env 는 stock-monitor 에 있습니다(이미 .gitignore). 여기서는 읽기만 합니다.
 
@@ -92,21 +94,9 @@ def _env(name: str) -> str:
     return ""
 
 
-def _mailto() -> str:
-    return _env("PAPERS_CONTACT_EMAIL")
 
-
-def _polite(url: str) -> str:
-    """Crossref·OpenAlex 는 연락처를 주면 별도 풀로 보내 줍니다."""
-    m = _mailto()
-    if not m:
-        return url
-    return url + ("&" if "?" in url else "?") + urllib.parse.urlencode({"mailto": m})
 def _ua() -> dict:
-    """연락처는 환경변수와 .env 어느 쪽에 있어도 읽습니다."""
-    m = _mailto()
-    tail = f" (mailto:{m})" if m else " (contact via repository owner)"
-    return {"User-Agent": "ki-monitor-paper-harvest" + tail}
+    return {"User-Agent": "ki-monitor-paper-harvest"}
 
 # 근거 등급으로 올릴 수 있는 게재지. 여기 없으면 후보에도 넣지 않는다.
 JOURNALS = (
@@ -346,8 +336,8 @@ def harvest_openalex(year: int, cap: int, terms: list[tuple]) -> list[dict]:
             "filter": f"publication_year:{year},type:article",
             "search": term, "per-page": 40, "sort": "cited_by_count:desc",
         }))
-        body = get(_polite(url))
-        time.sleep(0.3)
+        body = get(url)
+        time.sleep(1.0)                 # 익명 풀 — 몰아치지 않는다
         for it in (body or {}).get("results", []):
             oid = it.get("id")
             if not oid or oid in seen:
@@ -491,8 +481,8 @@ def harvest(y0: int, y1: int, cap: int) -> int:
                                "abstract,is-referenced-by-count"),
                     "sort": "is-referenced-by-count", "order": "desc",
                 }))
-                body = get(_polite(url))
-                time.sleep(0.25)          # Crossref 예의 — 몰아치지 않는다
+                body = get(url)
+                time.sleep(1.0)         # 익명 풀 — 몰아치지 않는다          # Crossref 예의 — 몰아치지 않는다
                 if not body:
                     continue
                 for it in (body.get("message") or {}).get("items", []):
