@@ -779,15 +779,21 @@ python ki_monitor.py report --market KOSPI --with-agents
   python docs/fetch_papers.py --verify [--write]  # 채택본 발행정보 재대조 (Crossref)
   ```
 
-  수확 출처는 셋이고 등급이 다르다.
+  수확 출처는 넷이고 등급이 다르다.
 
   | 출처 | 등급 | 비고 |
   |---|---|---|
   | arXiv q-fin (8개 분류) | 프리프린트 | 퀀트 트레이딩이 공개 API 로 가장 많이 모이는 곳. 초록 전문 |
+  | Semantic Scholar | 저널 / SSRN·arXiv 는 프리프린트 | externalIds 로 SSRN 워킹페이퍼를 잡는다 |
   | OpenAlex | 저널 / SSRN 은 프리프린트 | 폭이 가장 넓다. 피인용 수 · 역색인 초록 |
   | Crossref | 저널 게재 | 발행 정보가 가장 정확 — `--verify` 는 여기로 |
 
-  SSRN 은 공개 API 가 없다(Elsevier). 긁지 않는다 — OpenAlex 색인분으로 들어온다.
+  SSRN 은 셀프서비스 API 가 없다(Elsevier). 긁지 않는다 — Semantic Scholar·
+  OpenAlex 색인분으로 들어온다.
+
+  키는 전부 선택이다. `.env` 의 `PAPERS_CONTACT_EMAIL`(Crossref·OpenAlex 의
+  polite pool — 신청 절차 없음)과 `S2_API_KEY`(Semantic Scholar 무료 신청)를
+  넣으면 더 안정적으로 돌 뿐, 없어도 넷 다 돈다.
   각 후보는 `abstract` · `venue_grade` · `cited_by` · `source` 를 달고 나가고,
   상한에 걸려 잘릴 때 **초록 있는 것이 먼저 남는다.**
 
